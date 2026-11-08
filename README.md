@@ -15,6 +15,11 @@ Each run produces:
 - a screenshot on failure;
 - when healing happened, a diff of what changed.
 
+> **What are journeys?** A journey is an XML file of plain-English steps that an AI agent performs and checks on an Android device. It's Google's format, and this project generates and runs files in it. See the official docs:
+> [Android CLI support for Journeys](https://developer.android.com/tools/agents/android-cli/journeys) ·
+> [Journeys for Android Studio](https://developer.android.com/studio/gemini/journeys) ·
+> [Android CLI](https://developer.android.com/tools/agents/android-cli)
+
 ## Requirements
 
 | Tool | Why |
@@ -28,7 +33,7 @@ Each run produces:
 ### Setup
 
 ```bash
-# Android CLI
+# Android CLI (https://developer.android.com/tools/agents/android-cli)
 curl -fsSL https://dl.google.com/android/cli/latest/darwin_arm64/install.sh | bash
 android info
 adb devices                      # note your serial, e.g. emulator-5554
@@ -145,6 +150,10 @@ See [`examples/login-prd.md`](examples/login-prd.md) and [`examples/checkout-prd
     </actions>
 </journey>
 ```
+
+This is the journey format from Android's [Journeys](https://developer.android.com/tools/agents/android-cli/journeys).
+Android Studio also has an editor for this format ([Journeys for Android Studio](https://developer.android.com/studio/gemini/journeys)).
+The "Tips for writing journeys" on that page also apply to steps generated here, for example: one clear action per step, and include the success criteria.
 
 Each `<action>` is one UI interaction in plain English. An action that starts with
 `Verify / Check / Ensure / Assert / Confirm` is an **assertion**, and healing never touches assertions.
