@@ -138,3 +138,24 @@ func TestDecodeDropsTapBeforeType(t *testing.T) {
 		t.Fatalf("want only the type step, got %+v", s.Steps)
 	}
 }
+
+func TestDecodeSession(t *testing.T) {
+	data := `[{"step":7,"action":"tap","element":"LOGIN","by":"accessibilityId","value":"Login"},
+	          {"action":"type","input":"😀😀","element":"USER","by":"id","value":"a:id/u"},
+	          {"action":"back"}]`
+	s, err := DecodeSession([]byte(data), "edge cases", "login-edge-cases")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Steps) != 3 || s.Steps[1].Text != `type "😀😀" USER` || s.Steps[2].Action != Back {
+		t.Fatalf("got %+v", s.Steps)
+	}
+	e, _ := Lookup("java")
+	if e.FileName(s) != "LoginEdgeCasesSession.java" {
+		t.Fatalf("file %q", e.FileName(s))
+	}
+	src := string(e.Render(s))
+	if !strings.Contains(src, "driver.navigate().back();") || !strings.Contains(src, "public final class LoginEdgeCasesSession") {
+		t.Fatalf("render:\n%s", src)
+	}
+}

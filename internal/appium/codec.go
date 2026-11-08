@@ -64,3 +64,33 @@ func uniqueName(byName map[string]Locator, l Locator) Locator {
 		l.Name = fmt.Sprintf("%s_%d", base, n)
 	}
 }
+
+// DecodeSession reads steps recorded during an exploratory session. There is
+// no journey action list: each row is its own step, described by its action
+// and element.
+func DecodeSession(data []byte, title, slug string) (Script, error) {
+	var rows []stepRow
+	if err := json.Unmarshal(data, &rows); err != nil {
+		return Script{}, fmt.Errorf("steps json: %w", err)
+	}
+	texts := make([]string, len(rows))
+	for i := range rows {
+		rows[i].Step = i + 1
+		texts[i] = describe(rows[i])
+	}
+	renumbered, _ := json.Marshal(rows)
+	sc, err := Decode(renumbered, title, slug, texts, 0)
+	sc.Kind = "Session"
+	return sc, err
+}
+
+func describe(r stepRow) string {
+	d := r.Action
+	if r.Input != "" {
+		d += fmt.Sprintf(" %q", r.Input)
+	}
+	if r.Element != "" {
+		d += " " + r.Element
+	}
+	return strings.TrimSpace(d)
+}

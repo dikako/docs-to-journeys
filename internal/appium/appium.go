@@ -66,6 +66,17 @@ type Script struct {
 	Total int
 	// FailedAt is the 1-based failing action, or 0 if the run passed.
 	FailedAt int
+	// Kind names what the code replays: "Journey" (default) or "Session".
+	Kind string
+}
+
+// ClassName is the type name an emitter should use, e.g. "LoginJourney".
+func (s Script) ClassName() string {
+	kind := s.Kind
+	if kind == "" {
+		kind = "Journey"
+	}
+	return PascalCase(s.Slug) + kind
 }
 
 // Locators returns the distinct locators in first-use order.

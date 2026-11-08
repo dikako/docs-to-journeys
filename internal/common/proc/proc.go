@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"time"
 )
 
 // Result is the outcome of a finished command.
@@ -90,4 +91,68 @@ func Require(names ...string) error {
 		}
 	}
 	return nil
+}
+
+// Stream runs c and calls onLine for every stdout line as it arrives, so a
+// caller can persist output live (it survives a timeout kill). Lines can be
+// large; there is no length limit. Stderr goes to c.LogPath if set.
+func Stream(ctx context.Context, c Cmd, onLine func(line []byte)) (Result, error) {
+	cmd := exec.CommandContext(ctx, c.Name, c.Args...)
+	// After a kill, child processes may still hold stdout open; stop waiting
+	// for them after a grace period.
+	cmd.WaitDelay = 5 * time.Second
+	if c.LogPath != "" {
+		f, err := os.Create(c.LogPath)
+		if err != nil {
+			return Result{}, err
+		}
+		defer f.Close()
+		cmd.Stderr = f
+	}
+	lw := &lineWriter{onLine: onLine}
+	cmd.Stdout = lw
+	err := cmd.Run()
+	lw.flush()
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return Result{ExitCode: 124, TimedOut: true}, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return Result{ExitCode: exitErr.ExitCode()}, nil
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		return Result{}, nil
+	}
+	return Result{}, err
+}
+
+// lineWriter splits a byte stream into lines.
+type lineWriter struct {
+	buf    []byte
+	onLine func([]byte)
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		w.emit(w.buf[:i])
+		w.buf = w.buf[i+1:]
+	}
+}
+
+func (w *lineWriter) flush() {
+	w.emit(w.buf)
+	w.buf = nil
+}
+
+func (w *lineWriter) emit(line []byte) {
+	line = bytes.TrimRight(line, "\r")
+	if len(bytes.TrimSpace(line)) > 0 {
+		w.onLine(append([]byte(nil), line...))
+	}
 }

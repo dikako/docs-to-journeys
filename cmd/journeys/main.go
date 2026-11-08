@@ -31,6 +31,7 @@ import (
 	"github.com/dikako/docs-to-journeys/internal/common/adb"
 	"github.com/dikako/docs-to-journeys/internal/common/claude"
 	"github.com/dikako/docs-to-journeys/internal/common/proc"
+	"github.com/dikako/docs-to-journeys/internal/explore"
 	"github.com/dikako/docs-to-journeys/internal/gherkin"
 	"github.com/dikako/docs-to-journeys/internal/runner"
 	"github.com/dikako/docs-to-journeys/internal/source"
@@ -42,18 +43,23 @@ const usage = `usage:
   journeys convert  [flags] <feature>...
   journeys run      [flags] <serials> [glob|dir]...
   journeys all      [flags] <source> <serials>
+  journeys explore  [flags] <serial> -charter "<mission>" [-minutes 20] [-prompt "<extra>"]
   journeys version
 
 <source> is a .md/.txt/.docx/.pdf file or a Notion, Confluence, or web link.
 <serials> is one adb serial or a comma-separated list (run in parallel).
 Unchanged journeys that already passed on the same app build are skipped as CACHED.
 Extra link kinds (other MCPs) go in sources.yaml.
+Flags may come before or after positional arguments.
 
 flags (env var in brackets):`
 
 type config struct {
 	pkg, model, reports, work, features, generated, sources string
 	appiumLang                                              string
+	charter, charterFile, prompt                            string
+	minutes                                                 int
+	noReset, toTests                                        bool
 	timeout                                                 time.Duration
 	maxHeal                                                 int
 	force, noCache                                          bool
@@ -92,10 +98,26 @@ func parseFlags(name string, args []string) (config, []string) {
 	fs.IntVar(&c.maxHeal, "max-heal", envInt("MAX_HEAL", 3), "heal → re-run cycles per failing journey [MAX_HEAL]")
 	fs.BoolVar(&c.force, "force", os.Getenv("FORCE") == "1", "ignore caches and overwrite generated files [FORCE=1]")
 	fs.BoolVar(&c.noCache, "no-cache", os.Getenv("NO_CACHE") == "1", "re-run journeys even if an identical run already passed [NO_CACHE=1]")
-	_ = fs.Parse(args)
+	fs.StringVar(&c.charter, "charter", "", "explore: the session's mission")
+	fs.StringVar(&c.charterFile, "charter-file", "", "explore: read the charter from a file")
+	fs.IntVar(&c.minutes, "minutes", envInt("EXPLORE_MINUTES", 20), "explore: time box in minutes [EXPLORE_MINUTES]")
+	fs.StringVar(&c.prompt, "prompt", "", "explore: extra instructions for the agent (test data, areas to avoid, persona)")
+	fs.BoolVar(&c.noReset, "no-reset", false, "explore: keep the app's current state (default: clear data and relaunch)")
+	fs.BoolVar(&c.toTests, "to-tests", false, "explore: turn the findings into a .feature and journeys afterwards")
+
+	// Accept flags before and after positional arguments.
+	var pos []string
+	for {
+		_ = fs.Parse(args)
+		rest := fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		pos, args = append(pos, rest[0]), rest[1:]
+	}
 	c.noCache = c.noCache || c.force
 	c.timeout = time.Duration(*timeout) * time.Second
-	return c, fs.Args()
+	return c, pos
 }
 
 // version is set at release build time: -ldflags "-X main.version=v1.2.3".
@@ -116,7 +138,7 @@ func run(args []string) int {
 	}
 	cmd, rest := args[0], args[1:]
 	switch cmd {
-	case "ingest", "gherkin", "convert", "run", "all":
+	case "ingest", "gherkin", "convert", "run", "all", "explore":
 	default:
 		cmd, rest = "run", args // legacy: <serial> [glob]
 	}
@@ -153,6 +175,11 @@ func run(args []string) int {
 		err = need(pos, 1, "run <serials> [glob|dir]...")
 		if err == nil {
 			code, err = c.run(ctx, pos[0], pos[1:])
+		}
+	case "explore":
+		err = need(pos, 1, `explore <serial> -charter "<mission>"`)
+		if err == nil {
+			code, err = c.explore(ctx, pos[0])
 		}
 	case "all":
 		err = need(pos, 2, "all <source> <serials>")
@@ -291,6 +318,78 @@ func (c config) run(ctx context.Context, serials string, patterns []string) (int
 		return 1, err
 	}
 	return 0, err
+}
+
+func (c config) explore(ctx context.Context, serial string) (int, error) {
+	if strings.Contains(serial, ",") {
+		return 0, errors.New("explore runs on one device; pass a single serial")
+	}
+	text := c.charter
+	if c.charterFile != "" {
+		b, err := os.ReadFile(c.charterFile)
+		if err != nil {
+			return 0, err
+		}
+		text = string(b)
+	}
+	charter, err := explore.NewCharter(text)
+	if err != nil {
+		return 0, err
+	}
+	if err := proc.Require("adb", "claude", "android"); err != nil {
+		return 0, err
+	}
+	emitter, err := appium.Lookup(c.appiumLang)
+	if err != nil {
+		return 0, err
+	}
+	dev := adb.Device{Serial: serial}
+	activity, restore, err := dev.Prepare(ctx, c.pkg)
+	if err != nil {
+		return 0, err
+	}
+	defer restore()
+
+	ag := c.agent()
+	ag.Timeout = 0 // the session sets its own deadline: time box + grace
+	svc := explore.NewExploreService(explore.Deps{
+		Agent: ag, Device: dev, Serial: serial, Pkg: c.pkg, Activity: activity,
+		Env: dev.Env(ctx, c.pkg), ReportDir: c.reports, Appium: emitter, Out: os.Stdout,
+	})
+	sess, err := svc.Run(ctx, charter, explore.Options{Minutes: c.minutes, Prompt: c.prompt, NoReset: c.noReset})
+	if err != nil {
+		return 0, err
+	}
+
+	fmt.Printf("\n----- Exploratory session: %s -----\n", sess.ID)
+	fmt.Printf("stopped:   %s after %s\n", sess.Stop, sess.Ended.Sub(sess.Started).Round(time.Second))
+	fmt.Printf("steps:     %d recorded → %s\n", len(sess.Steps), filepath.Join(sess.Dir, "steps.md"))
+	fmt.Printf("findings:  %d → %s\n", len(sess.Findings), sess.FindingsPath)
+	for i, f := range sess.Findings {
+		fmt.Printf("  %d. [%s] %s\n", i+1, f.Severity, f.Title)
+	}
+	if sess.Appium != "" {
+		fmt.Printf("appium:    %s\n", sess.Appium)
+	}
+	fmt.Printf("report:    %s\n", filepath.Join(sess.Dir, "session.md"))
+
+	if len(sess.Findings) == 0 {
+		return 0, nil
+	}
+	if !c.toTests {
+		fmt.Printf("\nTurn the findings into regression tests:\n  journeys explore ... -to-tests, or:\n  journeys gherkin %s\n", sess.FindingsPath)
+		return 0, nil
+	}
+	feature, err := c.gherkin(ctx, sess.FindingsPath)
+	if err != nil {
+		return 0, err
+	}
+	dir, err := c.convert(ctx, feature)
+	if err != nil {
+		return 0, err
+	}
+	fmt.Printf("\nRegression tests ready. Review %s, then run:\n  journeys run %s %s\n", feature, serial, dir)
+	return 0, nil
 }
 
 // expand resolves globs and directories to journey files. No pattern means
