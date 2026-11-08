@@ -1,0 +1,20 @@
+# Extra PRD source kinds, tried before the built-in ones
+# (text/rich files, notion, confluence, web, pdf).
+# Add a new MCP-backed source without touching Go code:
+#   name:          shown in logs
+#   match:         Go regexp on the source argument
+#   allowed_tools: --allowedTools for the fetching agent (MCP server or tool names, plus Write)
+#   hint:          printed when fetching fails (e.g. how to authenticate)
+#   instructions:  extra guidance for the agent
+sources: []
+#  - name: gdocs
+#    match: '^https://docs\.google\.com/document/'
+#    allowed_tools: [mcp__claude_ai_Google_Docs, Write]
+#    hint: run `claude`, then /mcp and authenticate claude.ai Google Docs
+#  - name: jira
+#    match: '^https://[^/]+\.atlassian\.net/browse/'
+#    allowed_tools: [mcp__claude_ai_Atlassian_Rovo, Write]
+#    instructions: Read the issue description, acceptance criteria, and linked Confluence pages. Read only.
+#  - name: linear
+#    match: '^https://linear\.app/'
+#    allowed_tools: [mcp__claude_ai_Linear, Write]

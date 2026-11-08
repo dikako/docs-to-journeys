@@ -1,0 +1,29 @@
+<journey name="Checkout one item">
+    <description>A user can complete checkout for a single item.</description>
+    <actions>
+        <action>Tap "Hamburger" menu</action>
+        <action>Tap "Log In" menu</action>
+        <action>Type "standard_user" in the Username field</action>
+        <action>Type "secret_sauce" in the Password field</action>
+        <action>Tap the "LOGIN" button</action>
+        <action>Verify that the "PRODUCTS" screen is shown with at least one product listed</action>
+        <action>Tap the "Sauce Labs Backpack" product to open its details</action>
+        <action>Tap the "Add to cart" button</action>
+        <action>Tap the "View cart" cart icon at the top of the screen</action>
+        <action>Tap the "Proceed To Checkout" button. This should open the shipping address form</action>
+        <action>Type "Dika" in the Full Name field</action>
+        <action>Type "Jalan Sudirman 1" in the Address Line 1 field</action>
+        <action>Type "Jakarta" in the City field</action>
+        <action>Type "12345" in the Zip Code field</action>
+        <action>Type "Indonesia" in the Country field</action>
+        <action>Tap the "To Payment" button. This should open the payment method form</action>
+        <action>Type "Dika" in the Full Name field</action>
+        <action>Type "4111111111111111" in the Card Number field</action>
+        <action>Type "0328" in the Expiration Date field</action>
+        <action>Type "123" in the Security Code field</action>
+        <action>Tap the "Review Order" button. This should open the order review screen</action>
+        <action>Verify that "Sauce Labs Backpack" and a total price are shown on the overview</action>
+        <action>Tap the "Place Order" button</action>
+        <action>Verify that an order confirmation / thank-you message is shown</action>
+    </actions>
+</journey>

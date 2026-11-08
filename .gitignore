@@ -1,0 +1,16 @@
+# Build output
+/bin/
+
+# Pipeline output (created in the folder you run from)
+reports/
+work/
+generated/
+*.log
+
+# Old local layout
+/journeys/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store

@@ -1,0 +1,11 @@
+<journey name="Login with standard user">
+    <description>A valid user can log in and land on the products list.</description>
+    <actions>
+        <action>Tap "Hamburger" menu</action>
+        <action>Tap "Log In" menu</action>
+        <action>Type "standard_user" in the Username field</action>
+        <action>Type "secret_sauce" in the Password field</action>
+        <action>Tap the "LOGIN" button</action>
+        <action>Verify that the "PRODUCTS" screen is shown with at least one product listed</action>
+    </actions>
+</journey>
