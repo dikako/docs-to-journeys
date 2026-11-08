@@ -98,7 +98,7 @@ func run(t *testing.T, res claude.Result, o Options) (Session, *fakeAgent, *fake
 		t.Fatal(err)
 	}
 	a, d := &fakeAgent{res: res}, &fakeDevice{}
-	s := NewExploreService(Deps{Agent: a, Device: d, Serial: "emu", Pkg: "com.app", Env: "app=1", ReportDir: t.TempDir()})
+	s := NewExploreService(Deps{Agent: a, Device: d, Serial: "emu", Pkg: "com.app", Env: "app=1", SessionsDir: t.TempDir()})
 	sess, err := s.Run(context.Background(), c, o)
 	if err != nil {
 		t.Fatal(err)
@@ -167,5 +167,25 @@ func TestHelperScriptCommandsAreRecorded(t *testing.T) {
 		if got != want {
 			t.Errorf("%q: recorded=%v want %v", cmd, got, want)
 		}
+	}
+}
+
+func TestCustomNameAndFolder(t *testing.T) {
+	c, _ := NewCharter("cart edge cases")
+	root := filepath.Join(t.TempDir(), "qa", "sessions")
+	s := NewExploreService(Deps{Agent: &fakeAgent{}, Device: &fakeDevice{}, Pkg: "p", SessionsDir: root})
+	sess, err := s.Run(context.Background(), c, Options{Minutes: 1, Name: "Sprint 42 / Cart smoke"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Dir != filepath.Join(root, "sprint-42-cart-smoke") || filepath.Base(sess.FindingsPath) != "sprint-42-cart-smoke-findings.md" {
+		t.Fatalf("dir=%s findings=%s", sess.Dir, sess.FindingsPath)
+	}
+	// The same name again must not overwrite the earlier session.
+	if _, err := s.Run(context.Background(), c, Options{Minutes: 1, Name: "sprint-42-cart-smoke"}); err == nil {
+		t.Fatal("want error for an existing session folder")
+	}
+	if _, err := SessionName(" / "); err == nil {
+		t.Fatal("want error for a name without letters or digits")
 	}
 }

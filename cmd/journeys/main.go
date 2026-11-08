@@ -43,7 +43,7 @@ const usage = `usage:
   journeys convert  [flags] <feature>...
   journeys run      [flags] <serials> [glob|dir]...
   journeys all      [flags] <source> <serials>
-  journeys explore  [flags] <serial> -charter "<mission>" [-minutes 20] [-prompt "<extra>"]
+  journeys explore  [flags] <serial> -charter "<mission>" [-minutes 20] [-prompt "<extra>"] [-out <dir>] [-name <name>]
   journeys version
 
 <source> is a .md/.txt/.docx/.pdf file or a Notion, Confluence, or web link.
@@ -57,7 +57,7 @@ flags (env var in brackets):`
 type config struct {
 	pkg, model, reports, work, features, generated, sources string
 	appiumLang                                              string
-	charter, charterFile, prompt                            string
+	charter, charterFile, prompt, exploreOut, sessionName   string
 	minutes                                                 int
 	noReset, toTests                                        bool
 	timeout                                                 time.Duration
@@ -102,6 +102,8 @@ func parseFlags(name string, args []string) (config, []string) {
 	fs.StringVar(&c.charterFile, "charter-file", "", "explore: read the charter from a file")
 	fs.IntVar(&c.minutes, "minutes", envInt("EXPLORE_MINUTES", 20), "explore: time box in minutes [EXPLORE_MINUTES]")
 	fs.StringVar(&c.prompt, "prompt", "", "explore: extra instructions for the agent (test data, areas to avoid, persona)")
+	fs.StringVar(&c.exploreOut, "out", env("EXPLORE_DIR", ""), "explore: folder to save sessions in (default <reports>/explore) [EXPLORE_DIR]")
+	fs.StringVar(&c.sessionName, "name", "", "explore: session folder name (default <date-time>-<charter>)")
 	fs.BoolVar(&c.noReset, "no-reset", false, "explore: keep the app's current state (default: clear data and relaunch)")
 	fs.BoolVar(&c.toTests, "to-tests", false, "explore: turn the findings into a .feature and journeys afterwards")
 
@@ -336,6 +338,15 @@ func (c config) explore(ctx context.Context, serial string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	out := c.exploreOut
+	if out == "" {
+		out = filepath.Join(c.reports, "explore")
+	}
+	if c.sessionName != "" {
+		if _, err := explore.SessionName(c.sessionName); err != nil {
+			return 0, err
+		}
+	}
 	if err := proc.Require("adb", "claude", "android"); err != nil {
 		return 0, err
 	}
@@ -354,9 +365,9 @@ func (c config) explore(ctx context.Context, serial string) (int, error) {
 	ag.Timeout = 0 // the session sets its own deadline: time box + grace
 	svc := explore.NewExploreService(explore.Deps{
 		Agent: ag, Device: dev, Serial: serial, Pkg: c.pkg, Activity: activity,
-		Env: dev.Env(ctx, c.pkg), ReportDir: c.reports, Appium: emitter, Out: os.Stdout,
+		Env: dev.Env(ctx, c.pkg), SessionsDir: out, Appium: emitter, Out: os.Stdout,
 	})
-	sess, err := svc.Run(ctx, charter, explore.Options{Minutes: c.minutes, Prompt: c.prompt, NoReset: c.noReset})
+	sess, err := svc.Run(ctx, charter, explore.Options{Minutes: c.minutes, Prompt: c.prompt, NoReset: c.noReset, Name: c.sessionName})
 	if err != nil {
 		return 0, err
 	}

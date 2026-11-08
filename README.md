@@ -195,7 +195,7 @@ On macOS, if Gatekeeper blocks the unsigned binary, run `xattr -d com.apple.quar
 ./run_journeys.sh convert features/<slug>.feature   # → generated/<slug>/<scenario>.journey.xml
 ./run_journeys.sh run     <serials> [glob|dir|file]...
 ./run_journeys.sh all     <source> <serials>        # all stages in order
-./run_journeys.sh explore <serial> -charter "…" [-minutes 20] [-prompt "…"] [-to-tests]   # exploratory session
+./run_journeys.sh explore <serial> -charter "…" [-minutes 20] [-prompt "…"] [-out dir] [-name name] [-to-tests]   # exploratory session
 ./run_journeys.sh <serial> [glob]                   # short form of `run`
 ```
 
@@ -454,21 +454,29 @@ flowchart LR
 | `-prompt "…"`                                |                          | extra instructions: test accounts, data, persona, areas to avoid                        |
 | `-no-reset`                                  | off                      | start from the app's current screen (the default clears app data and relaunches)        |
 | `-to-tests`                                  | off                      | turn the findings into a `.feature` and journeys afterwards                             |
+| `-out <dir>`                                 | `reports/explore` (`EXPLORE_DIR`) | where to save sessions, e.g. a shared QA folder: `-out ~/qa/sessions`          |
+| `-name <name>`                               | `<date-time>-<charter>`  | custom session folder name, e.g. `-name sprint-42-cart`. Existing folders are never overwritten |
 | `-pkg`, `-model`, `-reports`, `-appium-lang` |                          | as for the other commands                                                               |
 
-**Output: `reports/explore/<date-time>-<charter>/`**
+```bash
+# Save into a shared folder with a readable name
+journeys explore emulator-5554 -charter "Cart edge cases" -minutes 15 -out ~/qa/sessions -name sprint-42-cart
+# → ~/qa/sessions/sprint-42-cart/session.md, steps.md, sprint-42-cart-findings.md, …
+```
+
+**Output: `<out>/<name>/`** (default `reports/explore/<date-time>-<charter>/`)
 
 | File                           | Content                                                                                      |
 |--------------------------------|----------------------------------------------------------------------------------------------|
 | `session.md`                   | summary: charter, device and app build, duration, why it stopped, findings table, next steps |
-| `steps.md`                     | **every device command the agent ran**, numbered and time-stamped, with its intent           |
-| `<id>-findings.md`             | each issue: severity, steps to reproduce, expected vs actual, screenshot                     |
+| `steps.md`                     | **every command the agent ran**, numbered and time-stamped, with its intent                  |
+| `<name>-findings.md`           | each issue: severity, steps to reproduce, expected vs actual, screenshot                     |
 | `screenshots/`                 | `finding-N.png` per issue, plus `final.png`                                                  |
 | `appium/<Charter>Session.java` | the session replayed as Appium code ([format](#appium-test-code))                            |
 | `transcript.jsonl`             | the agent's full event stream, time-stamped (audit trail)                                    |
 
 **How steps are recorded:** the tool doesn't rely on the agent's own notes for the step log. It reads the agent's live
-event stream (`claude --output-format stream-json`) and writes every `adb`/`android` command as it happens. So`steps.md`
+event stream (`claude --output-format stream-json`) and writes every command as it happens. So `steps.md`
 is complete even if the time box cuts the session off mid-action. Findings are written by the agent right after each
 one, so they survive a cut-off too.
 
@@ -476,7 +484,7 @@ one, so they survive a cut-off too.
 becomes a scenario whose expected result is the assertion. With `-to-tests`:
 
 ```
-explore → <id>-findings.md → gherkin → features/<id>-findings.feature (review!) → convert → generated/<id>-findings/ → run
+explore → <name>-findings.md → gherkin → features/<name>-findings.feature (review!) → convert → generated/<name>-findings/ → run
 ```
 
 Bugs found while exploring then become journeys that fail until each bug is fixed.

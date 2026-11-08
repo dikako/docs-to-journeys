@@ -38,10 +38,10 @@ type Deps struct {
 	Activity string
 	// Env describes the app build and device, for the session report.
 	Env string
-	// ReportDir is the root; sessions go to <ReportDir>/explore/<id>/.
-	ReportDir string
-	Appium    appium.Emitter
-	Out       io.Writer
+	// SessionsDir is where session folders are created: <SessionsDir>/<id>/.
+	SessionsDir string
+	Appium      appium.Emitter
+	Out         io.Writer
 }
 
 // ExploreService runs exploratory sessions.
@@ -66,7 +66,17 @@ func (s *ExploreService) Run(ctx context.Context, c Charter, o Options) (Session
 	}
 	start := time.Now()
 	id := start.Format("20060102-1504") + "-" + c.Slug()
-	dir := filepath.Join(s.d.ReportDir, "explore", id)
+	if o.Name != "" {
+		n, err := SessionName(o.Name)
+		if err != nil {
+			return Session{}, err
+		}
+		id = n
+	}
+	dir := filepath.Join(s.d.SessionsDir, id)
+	if _, err := os.Stat(dir); err == nil {
+		return Session{}, fmt.Errorf("session folder %s already exists; choose another -name", dir)
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "screenshots"), 0o755); err != nil {
 		return Session{}, err
 	}

@@ -21,6 +21,18 @@ type Charter struct {
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
 
+// SessionName turns a user-chosen name into a safe folder name.
+func SessionName(name string) (string, error) {
+	n := strings.Trim(nonSlug.ReplaceAllString(strings.ToLower(strings.TrimSpace(name)), "-"), "-")
+	if n == "" {
+		return "", errors.New("session name must contain letters or digits")
+	}
+	if len(n) > 40 { // keeps "<name>-findings" under the 60-char feature slug limit
+		n = strings.Trim(n[:40], "-")
+	}
+	return n, nil
+}
+
 // NewCharter validates a charter.
 func NewCharter(text string) (Charter, error) {
 	text = strings.TrimSpace(text)
@@ -54,6 +66,8 @@ type Options struct {
 	Prompt string
 	// NoReset keeps the app's current state instead of a fresh launch.
 	NoReset bool
+	// Name is a custom session folder name; default "<YYYYMMDD-HHMM>-<charter>".
+	Name string
 }
 
 // StopReason says why a session ended.
