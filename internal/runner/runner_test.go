@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"docs-to-journeys/internal/common/claude"
@@ -34,14 +35,24 @@ func TestAppBug(t *testing.T) {
 }
 
 // fakeDevice records launches.
-type fakeDevice struct{ launches int }
+type fakeDevice struct {
+	mu       sync.Mutex
+	launches int
+}
 
-func (d *fakeDevice) ClearAndLaunch(context.Context, string, string) error { d.launches++; return nil }
-func (d *fakeDevice) Screencap(context.Context, string) error              { return nil }
+func (d *fakeDevice) ClearAndLaunch(context.Context, string, string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.launches++
+	return nil
+}
+func (d *fakeDevice) Screencap(context.Context, string) error { return nil }
 
 // fakeAgent plays a script: each call is either a run (writes a report) or a
 // heal (edits the journey), told apart by the prompt.
 type fakeAgent struct {
+	mu      sync.Mutex
+	calls   int
 	t       *testing.T
 	runs    []string // report bodies, one per run call
 	heals   []func(path string) string
@@ -49,9 +60,14 @@ type fakeAgent struct {
 }
 
 func (a *fakeAgent) Run(_ context.Context, p claude.Prompt) (claude.Result, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.calls++
 	if strings.HasPrefix(p.Text, "Run the journey") {
-		body := a.runs[0]
-		a.runs = a.runs[1:]
+		body := passReport
+		if len(a.runs) > 0 {
+			body, a.runs = a.runs[0], a.runs[1:]
+		}
 		report := between(p.Text, "Write results to ", ":")
 		if err := os.WriteFile(report, []byte(body), 0o644); err != nil {
 			a.t.Fatal(err)
@@ -95,7 +111,10 @@ func setup(t *testing.T, a *fakeAgent, maxHeal int) (*RunnerService, string, *fa
 	_ = os.WriteFile(p, []byte(orig), 0o644)
 	a.t, a.journey = t, p
 	dev := &fakeDevice{}
-	return NewRunnerService(Deps{Agent: a, Device: dev, Pkg: "p", ReportDir: filepath.Join(dir, "reports"), MaxHeal: maxHeal}), p, dev
+	return NewRunnerService(Deps{
+		Agent: a, Lanes: []Lane{{Serial: "emu-1", Device: dev, Env: "app=1"}},
+		Pkg: "p", ReportDir: filepath.Join(dir, "reports"), MaxHeal: maxHeal,
+	}), p, dev
 }
 
 func goodHeal(path string) string {
@@ -188,5 +207,88 @@ func TestRerunVerdictRerunsWithoutEdit(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(p); string(b) != orig {
 		t.Fatal("RERUN must not change the journey")
+	}
+}
+
+func TestCacheSkipsUnchangedPass(t *testing.T) {
+	a := &fakeAgent{runs: []string{passReport}}
+	s, p, dev := setup(t, a, 3)
+	if res, _ := s.Run(context.Background(), []string{p}); res[0].Status != Pass {
+		t.Fatalf("first run: %+v", res[0])
+	}
+	// Same journey, same env: cached, no device or agent work.
+	calls, launches := a.calls, dev.launches
+	res, _ := s.Run(context.Background(), []string{p})
+	if res[0].Status != Cached || a.calls != calls || dev.launches != launches {
+		t.Fatalf("second run: %+v calls=%d launches=%d", res[0], a.calls, dev.launches)
+	}
+	// Editing the journey invalidates the cache.
+	_ = os.WriteFile(p, []byte(strings.Replace(orig, "Tap \"LOGIN\"", "Tap \"LOG IN\"", 1)), 0o644)
+	if res, _ := s.Run(context.Background(), []string{p}); res[0].Status != Pass {
+		t.Fatalf("after edit: %+v", res[0])
+	}
+}
+
+func TestCacheInvalidatedByEnvAndNoCache(t *testing.T) {
+	a := &fakeAgent{}
+	s, p, dev := setup(t, a, 3)
+	_, _ = s.Run(context.Background(), []string{p})
+
+	// New app build (different Env) re-runs.
+	s.d.Lanes[0].Env = "app=2"
+	if res, _ := s.Run(context.Background(), []string{p}); res[0].Status != Pass {
+		t.Fatalf("new env: %+v", res[0])
+	}
+	// NoCache re-runs.
+	s.d.NoCache = true
+	launches := dev.launches
+	if res, _ := s.Run(context.Background(), []string{p}); res[0].Status != Pass || dev.launches != launches+1 {
+		t.Fatalf("no-cache: %+v", res[0])
+	}
+}
+
+func TestFailureIsNotCached(t *testing.T) {
+	a := &fakeAgent{runs: []string{failReport, passReport}}
+	s, p, _ := setup(t, a, 0)
+	if res, _ := s.Run(context.Background(), []string{p}); res[0].Status != Fail {
+		t.Fatalf("got %+v", res[0])
+	}
+	if res, _ := s.Run(context.Background(), []string{p}); res[0].Status != Pass {
+		t.Fatalf("failure must not be cached: %+v", res[0])
+	}
+}
+
+func TestParallelLanes(t *testing.T) {
+	dir := t.TempDir()
+	var paths []string
+	for _, n := range []string{"a", "b", "c", "d", "e"} {
+		p := filepath.Join(dir, n+".journey.xml")
+		_ = os.WriteFile(p, []byte(orig), 0o644)
+		paths = append(paths, p)
+	}
+	d1, d2 := &fakeDevice{}, &fakeDevice{}
+	s := NewRunnerService(Deps{
+		Agent: &fakeAgent{t: t},
+		Lanes: []Lane{{Serial: "emu-1", Device: d1}, {Serial: "emu-2", Device: d2}},
+		Pkg:   "p", ReportDir: filepath.Join(dir, "reports"),
+	})
+	res, err := s.Run(context.Background(), paths)
+	if err != nil || len(res) != 5 {
+		t.Fatalf("got %d results, err=%v", len(res), err)
+	}
+	for i, r := range res {
+		if r.Status != Pass || r.Name != strings.TrimSuffix(filepath.Base(paths[i]), ".journey.xml") {
+			t.Fatalf("result %d out of order or failed: %+v", i, r)
+		}
+	}
+	if d1.launches+d2.launches != 5 {
+		t.Fatalf("launches %d+%d", d1.launches, d2.launches)
+	}
+}
+
+func TestDuplicateNamesRejected(t *testing.T) {
+	s := NewRunnerService(Deps{Lanes: []Lane{{}}, ReportDir: t.TempDir()})
+	if _, err := s.Run(context.Background(), []string{"a/x.journey.xml", "b/x.journey.xml"}); err == nil {
+		t.Fatal("want error for duplicate journey names")
 	}
 }

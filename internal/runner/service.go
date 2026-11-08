@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"docs-to-journeys/internal/common/claude"
@@ -31,50 +32,142 @@ var (
 	healTools = []string{"Bash(android:*)", "Bash(adb:*)", "Read", "Edit"}
 )
 
+// Lane is one prepared device. Journeys are spread across lanes in parallel.
+type Lane struct {
+	Serial   string
+	Device   device
+	Activity string
+	// Env identifies what a pass depends on besides the journey itself:
+	// app version, device model, OS version. It is part of the cache key.
+	Env string
+}
+
 // Deps are the RunnerService's collaborators.
 type Deps struct {
-	Agent    agent
-	Device   device
-	Serial   string
-	Pkg      string
-	Activity string
+	Agent agent
+	Lanes []Lane
+	Pkg   string
+	// Model is recorded in the cache key; a different model re-runs journeys.
+	Model string
 	// ReportDir receives <name>.md, .log, .locators.java, .png, heal files.
 	ReportDir string
 	// MaxHeal is how many heal → re-run cycles a failing journey gets.
 	MaxHeal int
+	// NoCache re-runs journeys even when an identical pass is cached.
+	NoCache bool
 	Out     io.Writer
 }
 
 // RunnerService runs and heals journeys.
-type RunnerService struct{ d Deps }
+type RunnerService struct {
+	d     Deps
+	cache resultCache
+	outMu sync.Mutex
+}
 
 // NewRunnerService builds the service.
 func NewRunnerService(d Deps) *RunnerService {
 	if d.Out == nil {
 		d.Out = io.Discard
 	}
-	return &RunnerService{d: d}
+	return &RunnerService{d: d, cache: resultCache{dir: filepath.Join(d.ReportDir, ".cache")}}
 }
 
 const sep = "-----"
 
-// Run executes each journey, healing failures, and returns one result each.
+// Run executes the journeys across all lanes and returns results in input
+// order. Journeys whose identical run already passed are skipped as CACHED.
 func (s *RunnerService) Run(ctx context.Context, paths []string) ([]Result, error) {
+	if len(s.d.Lanes) == 0 {
+		return nil, fmt.Errorf("no device lanes")
+	}
+	if err := uniqueNames(paths); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(s.d.ReportDir, 0o755); err != nil {
 		return nil, err
 	}
-	var results []Result
-	for _, p := range paths {
-		if ctx.Err() != nil {
-			break
-		}
-		r := s.runJourney(ctx, p)
-		s.printLocators(r)
-		fmt.Fprintf(s.d.Out, "  %s (%s)\n", r.Status, r.Elapsed.Round(time.Second))
-		results = append(results, r)
+
+	results := make([]Result, len(paths))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for _, lane := range s.d.Lanes {
+		wg.Add(1)
+		go func(l Lane) {
+			defer wg.Done()
+			for i := range jobs {
+				results[i] = s.runJob(ctx, l, paths[i])
+			}
+		}(lane)
 	}
-	return results, ctx.Err()
+feed:
+	for i := range paths {
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(jobs)
+	wg.Wait()
+
+	out := results[:0]
+	for _, r := range results {
+		if r.Name != "" { // empty = never started (cancelled)
+			out = append(out, r)
+		}
+	}
+	return out, ctx.Err()
 }
+
+// runJob runs one journey on a lane. With one lane, progress streams live;
+// with several, each journey's output is printed as one block when done.
+func (s *RunnerService) runJob(ctx context.Context, l Lane, path string) Result {
+	var buf bytes.Buffer
+	w := io.Writer(&buf)
+	if len(s.d.Lanes) == 1 {
+		w = lockedWriter{mu: &s.outMu, w: s.d.Out}
+	}
+	r := s.runJourney(ctx, l, path, w)
+	s.printLocators(w, r)
+	suffix := ""
+	if r.Status == Cached {
+		suffix = ", passed " + r.CachedAt.Format("2006-01-02 15:04")
+	}
+	fmt.Fprintf(w, "  %s (%s%s)\n", r.Status, r.Elapsed.Round(time.Second), suffix)
+	if buf.Len() > 0 {
+		s.outMu.Lock()
+		_, _ = s.d.Out.Write(buf.Bytes())
+		s.outMu.Unlock()
+	}
+	return r
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (l lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+// uniqueNames rejects journeys that would share report files.
+func uniqueNames(paths []string) error {
+	seen := map[string]string{}
+	for _, p := range paths {
+		n := journeyName(p)
+		if prev, ok := seen[n]; ok {
+			return fmt.Errorf("journeys %s and %s would share reports/%s.*; rename one", prev, p, n)
+		}
+		seen[n] = p
+	}
+	return nil
+}
+
+func journeyName(path string) string { return strings.TrimSuffix(filepath.Base(path), ".journey.xml") }
 
 type files struct{ report, log, locators, png, diff string }
 
@@ -94,13 +187,15 @@ func (s *RunnerService) clean(name string) {
 	}
 }
 
-func (s *RunnerService) runJourney(ctx context.Context, path string) Result {
-	name := strings.TrimSuffix(filepath.Base(path), ".journey.xml")
+func (s *RunnerService) runJourney(ctx context.Context, l Lane, path string, out io.Writer) Result {
+	name := journeyName(path)
 	f := s.files(name)
-	s.clean(name)
-	fmt.Fprintf(s.d.Out, "%s %s %s\n", sep, name, sep)
-	start := time.Now()
-	r := Result{Name: name, Path: path, Locators: f.locators}
+	r := Result{Name: name, Path: path, Serial: l.Serial, Locators: f.locators}
+	title := name
+	if len(s.d.Lanes) > 1 {
+		title += " [" + l.Serial + "]"
+	}
+	fmt.Fprintf(out, "%s %s %s\n", sep, title, sep)
 
 	original, err := os.ReadFile(path)
 	if err != nil {
@@ -112,9 +207,19 @@ func (s *RunnerService) runJourney(ctx context.Context, path string) Result {
 		return r
 	}
 
-	r.Status, r.Note = s.runOnce(ctx, path, f)
+	key := s.cacheKey(original, l)
+	if !s.d.NoCache {
+		if e, ok := s.cache.lookup(name, key, f.report); ok {
+			r.Status, r.Heals, r.CachedAt = Cached, e.Heals, e.At
+			return r
+		}
+	}
+
+	s.clean(name)
+	start := time.Now()
+	r.Status, r.Note = s.runOnce(ctx, l, path, f)
 	for r.Status == Fail && r.Heals < s.d.MaxHeal && ctx.Err() == nil {
-		healed, status, note := s.heal(ctx, path, f, r.Heals+1)
+		healed, status, note := s.heal(ctx, l, path, f, r.Heals+1)
 		if !healed {
 			if status != "" {
 				r.Status = status
@@ -123,8 +228,8 @@ func (s *RunnerService) runJourney(ctx context.Context, path string) Result {
 			break
 		}
 		r.Heals++
-		fmt.Fprintf(s.d.Out, "  heal %d applied, re-running: %s\n", r.Heals, note)
-		r.Status, r.Note = s.runOnce(ctx, path, f)
+		fmt.Fprintf(out, "  heal %d applied, re-running: %s\n", r.Heals, note)
+		r.Status, r.Note = s.runOnce(ctx, l, path, f)
 	}
 
 	if r.Heals > 0 {
@@ -132,29 +237,38 @@ func (s *RunnerService) runJourney(ctx context.Context, path string) Result {
 		if r.Status == Pass {
 			r.Status = Healed
 		}
-		fmt.Fprintf(s.d.Out, "  healed diff: %s\n", f.diff)
+		fmt.Fprintf(out, "  healed diff: %s\n", f.diff)
 	}
 	if r.Note != "" {
-		fmt.Fprintf(s.d.Out, "  note: %s\n", r.Note)
+		fmt.Fprintf(out, "  note: %s\n", r.Note)
 	}
 	r.Elapsed = time.Since(start)
+
+	if r.Status.Passed() {
+		// Key the final file: a healed journey is cached as healed.
+		if final, err := os.ReadFile(path); err == nil {
+			s.cache.store(name, s.cacheKey(final, l), r)
+		}
+	} else {
+		s.cache.forget(name)
+	}
 	return r
 }
 
 // runOnce resets the app and runs the journey once.
-func (s *RunnerService) runOnce(ctx context.Context, path string, f files) (Status, string) {
+func (s *RunnerService) runOnce(ctx context.Context, l Lane, path string, f files) (Status, string) {
 	_ = os.Remove(f.report)
-	if err := s.d.Device.ClearAndLaunch(ctx, s.d.Pkg, s.d.Activity); err != nil {
+	if err := l.Device.ClearAndLaunch(ctx, s.d.Pkg, l.Activity); err != nil {
 		return Error, err.Error()
 	}
 	res, err := s.d.Agent.Run(ctx, claude.Prompt{
-		Text:  runPrompt(path, s.d.Serial, s.d.Pkg, f.report, f.locators),
+		Text:  runPrompt(path, l.Serial, s.d.Pkg, f.report, f.locators),
 		Tools: runTools,
 		Log:   f.log,
 	})
 	st, note := classify(res, err, f.report)
 	if st != Pass {
-		_ = s.d.Device.Screencap(ctx, f.png)
+		_ = l.Device.Screencap(ctx, f.png)
 	}
 	return st, note
 }
@@ -182,8 +296,9 @@ func classify(res claude.Result, err error, reportPath string) (Status, string) 
 }
 
 // heal asks the agent to fix the journey and guards the result. healed is true
-// when the journey changed and still tests the same thing.
-func (s *RunnerService) heal(ctx context.Context, path string, f files, attempt int) (healed bool, status Status, note string) {
+// when the journey should be re-run: it changed and still tests the same
+// thing, or the agent judged the failure a misjudged check (RERUN).
+func (s *RunnerService) heal(ctx context.Context, l Lane, path string, f files, attempt int) (healed bool, status Status, note string) {
 	before, err := os.ReadFile(path)
 	if err != nil {
 		return false, Error, err.Error()
@@ -195,9 +310,9 @@ func (s *RunnerService) heal(ctx context.Context, path string, f files, attempt 
 	locked := max(failIdx, 0)
 
 	res, err := s.d.Agent.Run(ctx, claude.Prompt{
-		Text:  healPrompt(path, s.d.Serial, s.d.Pkg, f.report, failStep.Text, failIdx, attempt, s.d.MaxHeal),
+		Text:  healPrompt(path, l.Serial, s.d.Pkg, f.report, failStep.Text, failIdx, attempt, s.d.MaxHeal),
 		Tools: healTools,
-		Log:   filepath.Join(s.d.ReportDir, fmt.Sprintf("%s.heal.%d.log", strings.TrimSuffix(filepath.Base(path), ".journey.xml"), attempt)),
+		Log:   filepath.Join(s.d.ReportDir, fmt.Sprintf("%s.heal.%d.log", journeyName(path), attempt)),
 	})
 	restore := func() { _ = os.WriteFile(path, before, 0o644) }
 	if err != nil {
@@ -246,32 +361,20 @@ func (s *RunnerService) writeDiff(ctx context.Context, original []byte, path, ou
 	_ = os.WriteFile(out, []byte(res.Stdout), 0o644)
 }
 
-func (s *RunnerService) printLocators(r Result) {
-	fmt.Fprintf(s.d.Out, "  %s Appium locators: %s %s\n", sep, r.Name, sep)
+func (s *RunnerService) printLocators(w io.Writer, r Result) {
+	if r.Locators == "" {
+		return
+	}
+	fmt.Fprintf(w, "  %s Appium locators: %s %s\n", sep, r.Name, sep)
 	b, err := os.ReadFile(r.Locators)
 	if err != nil || len(bytes.TrimSpace(b)) == 0 {
-		fmt.Fprintln(s.d.Out, "  (none recorded)")
+		fmt.Fprintln(w, "  (none recorded)")
 	} else {
 		for _, l := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
-			fmt.Fprintln(s.d.Out, "  "+l)
+			fmt.Fprintln(w, "  "+l)
 		}
 	}
-	fmt.Fprintf(s.d.Out, "  %s\n", sep)
-}
-
-// Summary prints the result table and returns how many did not pass.
-func Summary(w io.Writer, header string, results []Result) int {
-	failed := 0
-	fmt.Fprintf(w, "\n%s %s %s\n", sep, header, sep)
-	for _, r := range results {
-		if !r.Status.Passed() {
-			failed++
-		}
-		fmt.Fprintf(w, "%-14s %6s  heals=%d  %s\n", r.Status, r.Elapsed.Round(time.Second), r.Heals, r.Name)
-	}
-	fmt.Fprintln(w, sep)
-	fmt.Fprintf(w, "%d run, %d not passed\n", len(results), failed)
-	return failed
+	fmt.Fprintf(w, "  %s\n", sep)
 }
 
 func firstLine(s string) string {

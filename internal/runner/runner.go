@@ -15,6 +15,7 @@ type Status string
 const (
 	Pass         Status = "PASS"
 	Healed       Status = "HEALED"
+	Cached       Status = "CACHED"
 	Fail         Status = "FAIL"
 	AppBug       Status = "APP_BUG"
 	HealRejected Status = "HEAL_REJECTED"
@@ -25,15 +26,18 @@ const (
 )
 
 // Passed reports whether the journey counts as green.
-func (s Status) Passed() bool { return s == Pass || s == Healed }
+func (s Status) Passed() bool { return s == Pass || s == Healed || s == Cached }
 
 // Result is the outcome of one journey including its heal attempts.
 type Result struct {
 	Name     string
 	Path     string
+	Serial   string
 	Status   Status
 	Heals    int
 	Elapsed  time.Duration
 	Note     string
 	Locators string
+	// CachedAt is when the cached pass was recorded (Status == Cached).
+	CachedAt time.Time
 }

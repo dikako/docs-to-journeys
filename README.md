@@ -62,8 +62,8 @@ git clone <this repo> docs-to-journeys && cd docs-to-journeys
 ./run_journeys.sh ingest  <source>                  # → work/<slug>/prd.md
 ./run_journeys.sh gherkin <source>                  # → features/<slug>.feature   (review/edit this)
 ./run_journeys.sh convert features/<slug>.feature   # → generated/<slug>/<scenario>.journey.xml
-./run_journeys.sh run     <serial> [glob|dir|file]...
-./run_journeys.sh all     <source> <serial>         # all stages in order
+./run_journeys.sh run     <serials> [glob|dir|file]...
+./run_journeys.sh all     <source> <serials>        # all stages in order
 ./run_journeys.sh <serial> [glob]                   # short form of `run`
 ```
 
@@ -78,7 +78,8 @@ Recommended workflow:
 | `-model` | `MODEL` | `sonnet` | Claude model for every agent call |
 | `-timeout` | `JOURNEY_TIMEOUT` | `600` | seconds per agent call |
 | `-max-heal` | `MAX_HEAL` | `3` | heal → re-run cycles per failing journey (`0` disables healing) |
-| `-force` | `FORCE=1` | off | ignore caches, regenerate features and journeys |
+| `-no-cache` | `NO_CACHE=1` | off | re-run journeys even if an identical run already passed |
+| `-force` | `FORCE=1` | off | ignore every cache, regenerate features and journeys (implies `-no-cache`) |
 | `-reports` | `REPORT_DIR` | `reports` | output folder |
 | `-work` / `-features` / `-generated` | `WORK_DIR` / `FEATURE_DIR` / `GENERATED_DIR` | `work` / `features` / `generated` | pipeline folders |
 | `-sources` | `SOURCES_FILE` | repo `sources.yaml` | extra source kinds |
@@ -158,6 +159,7 @@ Example from a real run: [`examples/journeys/checkout.journey.xml`](examples/jou
 | Status | Meaning |
 |---|---|
 | `PASS` | passed first time |
+| `CACHED` | skipped: this exact journey already passed on the same app build, device model, and OS (see [Speed](#speed-caching-and-parallel-devices)) |
 | `HEALED` | passed after ≥1 heal; see `reports/<name>.heal.diff` |
 | `FAIL` | still failing after `-max-heal` cycles, or the healer couldn't fix it |
 | `APP_BUG` | the healer judged the app to be wrong |
@@ -175,12 +177,36 @@ The exit code is `0` when every journey passed or healed, `1` when any did not, 
 | `reports/<name>.png` | screenshot when not passed |
 | `reports/<name>.log`, `<name>.heal.<n>.log` | agent transcripts |
 | `reports/<name>.heal.diff` | original → healed journey |
+| `reports/.cache/<name>.json` | fingerprint of the last pass (used to skip unchanged journeys) |
 | `work/<slug>/prd.md` | normalized PRD (links cached here) |
 | `features/<slug>.feature` | generated Gherkin, stamped with the PRD hash |
 | `generated/<slug>/*.journey.xml` | generated journeys |
 
-Caching works as follows (`-force` resets all three):
-- link sources are fetched once;
+## Speed: caching and parallel devices
+
+Most of the time goes into running journeys on the device (about 1 minute per short journey, several minutes with healing). Two features cut it down.
+
+**1. Result cache: skip what already passed.** After a journey passes (PASS or HEALED), its fingerprint is saved in `reports/.cache/<name>.json`. The fingerprint covers:
+- the exact journey file;
+- the app's `versionName`, `versionCode`, and install time;
+- the device model and Android version;
+- the Claude model;
+- the run-prompt version.
+
+On the next run, a journey with the same fingerprint is reported as `CACHED` in under a second, and its last report and locators are kept. Anything that changes re-runs automatically: editing the journey, installing a new build, using another device type, or upgrading this tool. Failures are never cached. Use `-no-cache` to re-run everything.
+
+Measured on an emulator: `login` took 1m15s the first time and 0.3s when cached.
+
+**2. Parallel devices: spread journeys across several devices.** Pass a comma-separated list of serials:
+
+```bash
+./run_journeys.sh run emulator-5554,emulator-5556,R58M123ABC generated/checkout-prd
+```
+
+Each device takes the next journey from a shared queue. With N devices the run is up to N× faster. Output is printed per journey as each one finishes, and the summary keeps the input order and shows which device ran each journey. All devices need the app installed.
+
+The other stages are cached too (`-force` resets them):
+- link sources are fetched once into `work/<slug>/prd.md`;
 - a feature is regenerated only when the PRD content changes;
 - existing journeys are never overwritten, so healed journeys survive regeneration.
 
@@ -193,6 +219,8 @@ Caching works as follows (`-force` resets all three):
 | `notion source: could not fetch …` | run `claude` → `/mcp` → authenticate Notion; check `work/<slug>/ingest.log` |
 | `no source kind matches` | use a supported file type or add a kind to `sources.yaml` |
 | `TIMEOUT` | raise `-timeout`; long journeys plus healing take minutes |
+| A journey shows `CACHED` but you want it re-run | `-no-cache`, or delete `reports/.cache/<name>.json` |
+| `journeys … would share reports/…` | two journeys have the same file name in different folders; rename one |
 | Generated journey looks wrong | edit the `.feature` file, then `convert -force` |
 
 ## Project layout
@@ -203,7 +231,7 @@ internal/common/     shared kernel: proc (exec), claude (headless CLI client), a
 internal/source/     document ingestion + source-kind registry (sources.yaml)
 internal/journey/    journey model, XML codec, heal guard
 internal/gherkin/    PRD → feature, feature → journeys (cucumber parser expands Background/Outline)
-internal/runner/     run + heal loop, report parsing, summary
+internal/runner/     run + heal loop, parallel device lanes, result cache, report parsing, summary
 examples/            example PRDs + sample journeys
 run_journeys.sh      launcher (builds and runs the CLI)
 sources.yaml         extra document source kinds

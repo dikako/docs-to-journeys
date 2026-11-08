@@ -3,8 +3,11 @@
 //	journeys ingest   <source>              PRD (file or link) → work/<slug>/prd.md
 //	journeys gherkin  <source>              → features/<slug>.feature
 //	journeys convert  <feature>...          → generated/<slug>/<scenario>.journey.xml
-//	journeys run      <serial> [glob|dir]…  run journeys with self-healing
-//	journeys all      <source> <serial>     every stage in order
+//	journeys run      <serials> [glob|dir]… run journeys with self-healing
+//	journeys all      <source> <serials>    every stage in order
+//
+// <serials> is one adb serial or a comma-separated list; journeys are spread
+// across the devices in parallel.
 //
 // For compatibility, `journeys <serial> [glob]` means `journeys run`.
 package main
@@ -36,10 +39,12 @@ const usage = `usage:
   journeys ingest   [flags] <source>
   journeys gherkin  [flags] <source>
   journeys convert  [flags] <feature>...
-  journeys run      [flags] <serial> [glob|dir]...
-  journeys all      [flags] <source> <serial>
+  journeys run      [flags] <serials> [glob|dir]...
+  journeys all      [flags] <source> <serials>
 
 <source> is a .md/.txt/.docx/.pdf file or a Notion, Confluence, or web link.
+<serials> is one adb serial or a comma-separated list (run in parallel).
+Unchanged journeys that already passed on the same app build are skipped as CACHED.
 Extra link kinds (other MCPs) go in sources.yaml.
 
 flags (env var in brackets):`
@@ -48,7 +53,7 @@ type config struct {
 	pkg, model, reports, work, features, generated, sources string
 	timeout                                                 time.Duration
 	maxHeal                                                 int
-	force                                                   bool
+	force, noCache                                          bool
 }
 
 func env(k, def string) string {
@@ -82,7 +87,9 @@ func parseFlags(name string, args []string) (config, []string) {
 	fs.StringVar(&c.sources, "sources", env("SOURCES_FILE", "sources.yaml"), "extra source kinds [SOURCES_FILE]")
 	fs.IntVar(&c.maxHeal, "max-heal", envInt("MAX_HEAL", 3), "heal → re-run cycles per failing journey [MAX_HEAL]")
 	fs.BoolVar(&c.force, "force", os.Getenv("FORCE") == "1", "ignore caches and overwrite generated files [FORCE=1]")
+	fs.BoolVar(&c.noCache, "no-cache", os.Getenv("NO_CACHE") == "1", "re-run journeys even if an identical run already passed [NO_CACHE=1]")
 	_ = fs.Parse(args)
+	c.noCache = c.noCache || c.force
 	c.timeout = time.Duration(*timeout) * time.Second
 	return c, fs.Args()
 }
@@ -132,12 +139,12 @@ func run(args []string) int {
 			_, err = c.convert(ctx, pos[i])
 		}
 	case "run":
-		err = need(pos, 1, "run <serial> [glob|dir]...")
+		err = need(pos, 1, "run <serials> [glob|dir]...")
 		if err == nil {
 			code, err = c.run(ctx, pos[0], pos[1:])
 		}
 	case "all":
-		err = need(pos, 2, "all <source> <serial>")
+		err = need(pos, 2, "all <source> <serials>")
 		if err == nil {
 			var feature, dir string
 			if feature, err = c.gherkin(ctx, pos[0]); err == nil {
@@ -231,7 +238,7 @@ func (c config) convert(ctx context.Context, feature string) (string, error) {
 	return filepath.Join(c.generated, slug), nil
 }
 
-func (c config) run(ctx context.Context, serial string, patterns []string) (int, error) {
+func (c config) run(ctx context.Context, serials string, patterns []string) (int, error) {
 	if err := proc.Require("adb", "claude", "android"); err != nil {
 		return 0, err
 	}
@@ -239,19 +246,32 @@ func (c config) run(ctx context.Context, serial string, patterns []string) (int,
 	if err != nil {
 		return 0, err
 	}
-	dev := adb.Device{Serial: serial}
-	activity, restore, err := dev.Prepare(ctx, c.pkg)
-	if err != nil {
-		return 0, err
+
+	var lanes []runner.Lane
+	for _, serial := range strings.Split(serials, ",") {
+		serial = strings.TrimSpace(serial)
+		if serial == "" {
+			continue
+		}
+		dev := adb.Device{Serial: serial}
+		activity, restore, err := dev.Prepare(ctx, c.pkg)
+		if err != nil {
+			return 0, err
+		}
+		defer restore()
+		lanes = append(lanes, runner.Lane{Serial: serial, Device: dev, Activity: activity, Env: dev.Env(ctx, c.pkg)})
 	}
-	defer restore()
+	if len(lanes) == 0 {
+		return 0, errors.New("no device serial given")
+	}
 
 	svc := runner.NewRunnerService(runner.Deps{
-		Agent: c.agent(), Device: dev, Serial: serial, Pkg: c.pkg, Activity: activity,
-		ReportDir: c.reports, MaxHeal: c.maxHeal, Out: os.Stdout,
+		Agent: c.agent(), Lanes: lanes, Pkg: c.pkg, Model: c.model,
+		ReportDir: c.reports, MaxHeal: c.maxHeal, NoCache: c.noCache, Out: os.Stdout,
 	})
+	start := time.Now()
 	results, err := svc.Run(ctx, paths)
-	header := fmt.Sprintf("Summary (%s on %s, model=%s, max-heal=%d)", c.pkg, serial, c.model, c.maxHeal)
+	header := fmt.Sprintf("Summary (%s on %s, model=%s, max-heal=%d, %s)", c.pkg, serials, c.model, c.maxHeal, time.Since(start).Round(time.Second))
 	if runner.Summary(os.Stdout, header, results) > 0 {
 		return 1, err
 	}

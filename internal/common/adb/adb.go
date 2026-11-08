@@ -82,3 +82,37 @@ func (d Device) Screencap(ctx context.Context, path string) error {
 	_, err = proc.Run(ctx, proc.Cmd{Name: "adb", Args: []string{"-s", d.Serial, "exec-out", "screencap", "-p"}, Stdout: f})
 	return err
 }
+
+// Env describes what a test result depends on besides the test itself: the
+// installed app version and the device model and OS. Missing values are left
+// as "?" so the string is still stable.
+func (d Device) Env(ctx context.Context, pkg string) string {
+	get := func(args ...string) string {
+		v, err := d.out(ctx, args...)
+		if err != nil || v == "" {
+			return "?"
+		}
+		return v
+	}
+	// lastUpdateTime catches reinstalls of a debug build with the same version.
+	fields := map[string]string{"versionName": "?", "versionCode": "?", "lastUpdateTime": "?"}
+	if dump, err := d.out(ctx, "shell", "dumpsys", "package", pkg); err == nil {
+		for _, l := range strings.Split(dump, "\n") {
+			l = strings.TrimSpace(l)
+			if v, ok := strings.CutPrefix(l, "lastUpdateTime="); ok && fields["lastUpdateTime"] == "?" {
+				fields["lastUpdateTime"] = v // value contains a space
+				continue
+			}
+			for _, f := range strings.Fields(l) {
+				k, v, ok := strings.Cut(f, "=")
+				if cur, want := fields[k]; ok && want && cur == "?" {
+					fields[k] = v
+				}
+			}
+		}
+	}
+	version := fields["versionName"] + "(" + fields["versionCode"] + ")"
+	updated := fields["lastUpdateTime"]
+	return fmt.Sprintf("app=%s %s updated=%s model=%s android=%s", pkg, version, updated,
+		get("shell", "getprop", "ro.product.model"), get("shell", "getprop", "ro.build.version.release"))
+}
