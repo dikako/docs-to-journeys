@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"docs-to-journeys/internal/common/claude"
+	"github.com/dikako/docs-to-journeys/internal/common/claude"
 )
 
 const feature = `Feature: Checkout

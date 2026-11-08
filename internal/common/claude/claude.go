@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"docs-to-journeys/internal/common/proc"
+	"github.com/dikako/docs-to-journeys/internal/common/proc"
 )
 
 // Prompt is one headless agent invocation.

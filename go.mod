@@ -1,4 +1,4 @@
-module docs-to-journeys
+module github.com/dikako/docs-to-journeys
 
 go 1.27
 

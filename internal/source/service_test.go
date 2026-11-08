@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"docs-to-journeys/internal/common/claude"
+	"github.com/dikako/docs-to-journeys/internal/common/claude"
 )
 
 type fakeAgent struct{ calls int }

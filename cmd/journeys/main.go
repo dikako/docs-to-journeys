@@ -27,12 +27,12 @@ import (
 	"syscall"
 	"time"
 
-	"docs-to-journeys/internal/common/adb"
-	"docs-to-journeys/internal/common/claude"
-	"docs-to-journeys/internal/common/proc"
-	"docs-to-journeys/internal/gherkin"
-	"docs-to-journeys/internal/runner"
-	"docs-to-journeys/internal/source"
+	"github.com/dikako/docs-to-journeys/internal/common/adb"
+	"github.com/dikako/docs-to-journeys/internal/common/claude"
+	"github.com/dikako/docs-to-journeys/internal/common/proc"
+	"github.com/dikako/docs-to-journeys/internal/gherkin"
+	"github.com/dikako/docs-to-journeys/internal/runner"
+	"github.com/dikako/docs-to-journeys/internal/source"
 )
 
 const usage = `usage:

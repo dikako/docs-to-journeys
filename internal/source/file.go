@@ -6,7 +6,7 @@ import (
 	"os"
 	"runtime"
 
-	"docs-to-journeys/internal/common/proc"
+	"github.com/dikako/docs-to-journeys/internal/common/proc"
 )
 
 func copyFile(_ context.Context, ref, out, _ string) error {

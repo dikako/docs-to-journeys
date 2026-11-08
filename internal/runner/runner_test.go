@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"docs-to-journeys/internal/common/claude"
+	"github.com/dikako/docs-to-journeys/internal/common/claude"
 )
 
 func TestParseReportFixture(t *testing.T) {

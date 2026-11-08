@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"docs-to-journeys/internal/common/claude"
-	"docs-to-journeys/internal/journey"
-	"docs-to-journeys/internal/source"
+	"github.com/dikako/docs-to-journeys/internal/common/claude"
+	"github.com/dikako/docs-to-journeys/internal/journey"
+	"github.com/dikako/docs-to-journeys/internal/source"
 )
 
 // agent is the slice of the Claude client this context needs.

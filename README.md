@@ -1,9 +1,15 @@
 # docs-to-journeys
 
-Turn a product document (Markdown, Word, PDF, Notion, Confluence, …) into Gherkin, then into
-Android UI journeys that an AI agent runs on a real device or emulator. When a journey's steps
-don't match the app's real flow, the runner **self-heals** the journey and runs it again. It
-never changes the journey's assertions.
+[![CI](https://github.com/dikako/docs-to-journeys/actions/workflows/ci.yml/badge.svg)](https://github.com/dikako/docs-to-journeys/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/dikako/docs-to-journeys?sort=semver)](https://github.com/dikako/docs-to-journeys/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/dikako/docs-to-journeys.svg)](https://pkg.go.dev/github.com/dikako/docs-to-journeys)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**AI-generated, self-healing Android UI tests from your product docs.**
+docs-to-journeys turns a PRD or spec (Markdown, Word, PDF, Notion, Confluence, …) into Gherkin (BDD) scenarios, then into
+[Android Journeys](https://developer.android.com/tools/agents/android-cli/journeys). An AI agent (Claude Code + Android CLI)
+runs these on a real device or emulator. When a journey's steps don't match the app's real flow, the runner **self-heals**
+the journey and runs it again. It never changes the journey's assertions.
 
 ```
 PRD/doc ──ingest──▶ prd.md ──gherkin──▶ .feature ──convert──▶ *.journey.xml ──run + heal──▶ reports/
@@ -49,7 +55,7 @@ claude plugin install android-cli@android-cli-plugin
 ## Quick start
 
 ```bash
-git clone <this repo> docs-to-journeys && cd docs-to-journeys
+git clone https://github.com/dikako/docs-to-journeys.git && cd docs-to-journeys
 
 # 1. Run the sample journeys (no PRD needed)
 ./run_journeys.sh run emulator-5554 examples/journeys
@@ -61,9 +67,19 @@ git clone <this repo> docs-to-journeys && cd docs-to-journeys
 
 `run_journeys.sh` builds the Go CLI into `bin/journeys`, both on first use and whenever the sources change. It then forwards all arguments. You can run it from any folder: `reports/`, `work/`, `features/` and `generated/` are created in the current directory, and those folders are git-ignored.
 
+### Install with Go
+
+```bash
+go install github.com/dikako/docs-to-journeys/cmd/journeys@latest
+journeys version
+journeys all prd.md emulator-5554
+```
+
+Add `sources.yaml` from this repo to your working folder if you need extra source kinds.
+
 ### Install from a release (no Go needed)
 
-Download the archive for your platform from the GitHub **Releases** page and unpack it.
+Download the archive for your platform from the [Releases](https://github.com/dikako/docs-to-journeys/releases) page and unpack it.
 Builds are available for macOS arm64/amd64 and Linux amd64/arm64.
 
 ```bash
@@ -273,7 +289,7 @@ make build     # bin/journeys
 
 - **Change the agent's instructions:** edit `internal/gherkin/prompts.go` or `internal/runner/prompts.go`.
 - **Change what counts as a safe heal:** edit `internal/journey/guard.go` and add a case to `journey_test.go`.
-- **Module path:** the module is `docs-to-journeys`. To make it `go install`-able from GitHub, run `go mod edit -module github.com/<owner>/docs-to-journeys`, then update the import paths to match.
+- **Module path:** `github.com/dikako/docs-to-journeys`.
 
 ### Releasing
 
@@ -298,3 +314,12 @@ Bash suits linear glue: call `adb` and `claude` in order, then grep a status. Th
 - unit tests.
 
 So the Go CLI holds all the logic, and `run_journeys.sh` is a thin launcher.
+
+## License
+
+[MIT](LICENSE) © dikako
+
+## Keywords
+
+Android UI testing · AI test automation · Android Journeys · Android CLI · Claude Code · Gherkin / BDD · PRD to test cases ·
+self-healing tests · test generation from requirements · Appium locators · Notion / Confluence to tests · QA automation

@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"docs-to-journeys/internal/common/proc"
+	"github.com/dikako/docs-to-journeys/internal/common/proc"
 )
 
 var animKeys = []string{"window_animation_scale", "transition_animation_scale", "animator_duration_scale"}

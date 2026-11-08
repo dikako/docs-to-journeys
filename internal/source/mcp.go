@@ -7,7 +7,7 @@ import (
 	"os"
 	"regexp"
 
-	"docs-to-journeys/internal/common/claude"
+	"github.com/dikako/docs-to-journeys/internal/common/claude"
 )
 
 // agent is the slice of the Claude client this context needs.

@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"docs-to-journeys/internal/common/claude"
-	"docs-to-journeys/internal/common/proc"
-	"docs-to-journeys/internal/journey"
+	"github.com/dikako/docs-to-journeys/internal/common/claude"
+	"github.com/dikako/docs-to-journeys/internal/common/proc"
+	"github.com/dikako/docs-to-journeys/internal/journey"
 )
 
 // agent is the slice of the Claude client the runner needs.
