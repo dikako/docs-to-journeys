@@ -41,6 +41,7 @@ const usage = `usage:
   journeys convert  [flags] <feature>...
   journeys run      [flags] <serials> [glob|dir]...
   journeys all      [flags] <source> <serials>
+  journeys version
 
 <source> is a .md/.txt/.docx/.pdf file or a Notion, Confluence, or web link.
 <serials> is one adb serial or a comma-separated list (run in parallel).
@@ -94,11 +95,18 @@ func parseFlags(name string, args []string) (config, []string) {
 	return c, fs.Args()
 }
 
+// version is set at release build time: -ldflags "-X main.version=v1.2.3".
+var version = "dev"
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
 func run(args []string) int {
+	if len(args) > 0 && (args[0] == "version" || args[0] == "--version" || args[0] == "-v") {
+		fmt.Println("journeys", version)
+		return 0
+	}
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		fmt.Fprintln(os.Stderr, usage)
 		return 2

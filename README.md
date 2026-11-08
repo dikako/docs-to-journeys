@@ -56,6 +56,21 @@ git clone <this repo> docs-to-journeys && cd docs-to-journeys
 
 `run_journeys.sh` builds the Go CLI into `bin/journeys`, both on first use and whenever the sources change. It then forwards all arguments. You can run it from any folder: `reports/`, `work/`, `features/` and `generated/` are created in the current directory, and those folders are git-ignored.
 
+### Install from a release (no Go needed)
+
+Download the archive for your platform from the GitHub **Releases** page and unpack it.
+Builds are available for macOS arm64/amd64 and Linux amd64/arm64.
+
+```bash
+tar -xzf docs-to-journeys_v1.0.0_darwin_arm64.tar.gz
+cd docs-to-journeys_v1.0.0_darwin_arm64
+./bin/journeys version
+./bin/journeys all examples/login-prd.md emulator-5554   # same commands as run_journeys.sh
+```
+
+Each archive contains `bin/journeys`, `README.md`, `sources.yaml` and `examples/`. Check downloads against `checksums.txt`.
+On macOS, if Gatekeeper blocks the unsigned binary, run `xattr -d com.apple.quarantine bin/journeys`.
+
 ## Commands
 
 ```bash
@@ -250,6 +265,18 @@ make build     # bin/journeys
 - **Change the agent's instructions:** edit `internal/gherkin/prompts.go` or `internal/runner/prompts.go`.
 - **Change what counts as a safe heal:** edit `internal/journey/guard.go` and add a case to `journey_test.go`.
 - **Module path:** the module is `docs-to-journeys`. To make it `go install`-able from GitHub, run `go mod edit -module github.com/<owner>/docs-to-journeys`, then update the import paths to match.
+
+### Releasing
+
+Push a version tag. [`.github/workflows/release.yml`](.github/workflows/release.yml) then:
+1. runs `make check`;
+2. builds the four platform archives with the version stamped in (`journeys version`);
+3. publishes a GitHub release with generated notes and `checksums.txt`.
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0       # release
+git tag v1.1.0-rc.1 && git push origin v1.1.0-rc.1   # tags with a "-" are marked pre-release
+```
 
 ### Why Go instead of a bash script?
 
