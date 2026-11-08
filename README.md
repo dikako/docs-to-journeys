@@ -21,7 +21,7 @@ flowchart LR
     JRN["🧭 <b>.journey.xml</b><br/>step-by-step<br/>UI actions"]
     RUN{"📱 <b>Run on</b><br/><b>device</b>"}
     HEAL["🩹 <b>Self-heal</b><br/>fix the steps<br/>keep the checks"]
-    OK["✅ <b>Report</b><br/>pass/fail per step<br/>Appium locators<br/>screenshots"]
+    OK["✅ <b>Report</b><br/>pass/fail per step<br/>Appium test code<br/>screenshots"]
     BUG["🐞 <b>APP_BUG</b><br/>evidence for<br/>a bug ticket"]
 
     DOC -- "1 ingest" --> MD
@@ -51,7 +51,7 @@ flowchart LR
 | **1. Ingest** | `ingest <doc>` | reads your doc from a file or link (Notion and Confluence through Claude's connectors) | `work/<doc>/prd.md` |
 | **2. Gherkin** | `gherkin <doc>` | AI writes one scenario per acceptance criterion. **Review and edit this file.** | `features/<doc>.feature` |
 | **3. Convert** | `convert <feature>` | each scenario becomes concrete UI steps; every `Then` becomes a `Verify` check | `generated/<doc>/*.journey.xml` |
-| **4. Run + heal** | `run <device> <journeys>` | an AI agent taps and types on the device. If the steps don't match the real app, it fixes them (never the checks) and re-runs | `reports/`: ✅ / ❌ per step, locators, screenshots, heal diffs |
+| **4. Run + heal** | `run <device> <journeys>` | an AI agent taps and types on the device. If the steps don't match the real app, it fixes them (never the checks) and re-runs | `reports/`: ✅ / ❌ per step, Appium Java test, screenshots, heal diffs |
 
 One command does all four: `./run_journeys.sh all <doc> <device>`.
 Each step is cached, so re-runs only redo what changed.
@@ -66,7 +66,7 @@ Each step is cached, so re-runs only redo what changed.
 | You are… | Use it to… |
 |---|---|
 | **QA engineer** | turn a PRD or ticket into runnable acceptance tests in minutes, without writing code. Re-run them on every build, and get bug evidence (report + screenshot) when the app is wrong. |
-| **Android developer** | smoke-test your feature on an emulator before opening a PR; keep UI tests working after a redesign (self-healing); get ready-made Appium locators for your own test code. |
+| **Android developer** | smoke-test your feature on an emulator before opening a PR; keep UI tests working after a redesign (self-healing); get a ready-to-use Appium Java test (locators + steps) for every journey. |
 | **QA lead / PM** | check that what was built matches the PRD: every acceptance criterion becomes a scenario with a pass/fail result. |
 
 ### Good fit and not a fit
@@ -77,7 +77,7 @@ Each step is cached, so re-runs only redo what changed.
 | Smoke and regression runs on each build | Performance, battery, or network profiling |
 | UI flows that change often (healing keeps tests current) | Pixel-perfect visual checks (use screenshot testing) |
 | Checking the app against the PRD | Multi-finger gestures, long-press, rotation (see the [Journeys limits](https://developer.android.com/studio/gemini/journeys)) |
-| Bootstrapping Appium locators | Hard, fully deterministic CI gates: an AI judges each step, so expect occasional flakiness |
+| Bootstrapping Appium tests (locators + steps) | Hard, fully deterministic CI gates: an AI judges each step, so expect occasional flakiness |
 | Turning exploratory findings into regression tests ([see below](#exploratory-testing)) | iOS or web apps |
 
 A run costs agent time and tokens: about 1 minute per short journey, and several minutes when healing kicks in.
@@ -212,6 +212,7 @@ Recommended workflow:
 | `-pkg` | `PKG` | `com.saucelabs.mydemoapp.android` | app under test |
 | `-model` | `MODEL` | `sonnet` | Claude model for every agent call |
 | `-timeout` | `JOURNEY_TIMEOUT` | `600` | seconds per agent call |
+| `-appium-lang` | `APPIUM_LANG` | `java` | language of the generated [Appium test code](#appium-test-code) |
 | `-max-heal` | `MAX_HEAL` | `3` | heal → re-run cycles per failing journey (`0` disables healing) |
 | `-no-cache` | `NO_CACHE=1` | off | re-run journeys even if an identical run already passed |
 | `-force` | `FORCE=1` | off | ignore every cache, regenerate features and journeys (implies `-no-cache`) |
@@ -323,7 +324,8 @@ The exit code is `0` when every journey passed or healed, `1` when any did not, 
 | Path | Content |
 |---|---|
 | `reports/<name>.md` | per-action ✅ / ❌ report |
-| `reports/<name>.locators.java` | `public static final By X = AppiumBy...;` per element |
+| `reports/appium/<Name>Journey.java` | Appium test code: element locators + the journey's steps ([details](#appium-test-code)) |
+| `reports/appium/<name>.steps.json` | the same steps as language-neutral data (action, input, locator) |
 | `reports/<name>.png` | screenshot when not passed |
 | `reports/<name>.log`, `<name>.heal.<n>.log` | agent transcripts |
 | `reports/<name>.heal.diff` | original → healed journey |
@@ -331,6 +333,70 @@ The exit code is `0` when every journey passed or healed, `1` when any did not, 
 | `work/<slug>/prd.md` | normalized PRD (links cached here) |
 | `features/<slug>.feature` | generated Gherkin, stamped with the PRD hash |
 | `generated/<slug>/*.journey.xml` | generated journeys |
+
+## Appium test code
+
+Every run records **only what automation needs**: each action, the text typed, and the element's locator. docs-to-journeys turns that into an Appium test you can copy into your own project, in `reports/appium/<Name>Journey.java`.
+
+```java
+public final class LoginJourney {
+
+    public static final By HAMBURGER_MENU = AppiumBy.accessibilityId("View menu");
+    public static final By USERNAME_FIELD = AppiumBy.id("com.saucelabs.mydemoapp.android:id/nameET");
+    public static final By LOGIN_BUTTON = AppiumBy.accessibilityId("Tap to login with given credentials");
+    public static final By PRODUCTS_TITLE = AppiumBy.id("com.saucelabs.mydemoapp.android:id/productTV");
+
+    /** Replays the journey Login with standard user. The app must already be launched. */
+    public static void run(AndroidDriver driver) {
+        WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(10));
+
+        // 1. Tap "Hamburger" menu
+        visible(wait, HAMBURGER_MENU).click();
+
+        // 3. Type "standard_user" in the Username field
+        visible(wait, USERNAME_FIELD).clear();
+        visible(wait, USERNAME_FIELD).sendKeys("standard_user");
+
+        // 5. Tap the "LOGIN" button
+        visible(wait, LOGIN_BUTTON).click();
+
+        // 6. Verify that the "PRODUCTS" screen is shown with at least one product listed
+        assertTrue(visible(wait, PRODUCTS_TITLE).isDisplayed(), "Verify that the \"PRODUCTS\" screen is shown ...");
+    }
+    // + a visible(wait, by) helper with an explicit wait
+}
+```
+
+Use it from a JUnit 5 test:
+
+```java
+@Test
+void login() {
+    LoginJourney.run(driver);   // your AndroidDriver, with the app launched
+}
+```
+
+You need `io.appium:java-client`, Selenium, and JUnit 5 on the classpath. Locators are chosen in this order: `accessibilityId` (content-desc), then `id` (resource-id), then `androidUIAutomator`, and `xpath` only when nothing else is unique.
+If a journey failed, the file holds the steps up to the failure, plus a note.
+
+### Other languages
+
+The agent records steps as **language-neutral data** (`reports/appium/<name>.steps.json`), and a small generator in Go turns that data into code. So the code is always well-formed (the Java output is compile-checked in the tests), and new languages need no changes to the AI side:
+
+```json
+[
+  {"step": 1, "action": "tap", "element": "HAMBURGER_MENU", "by": "accessibilityId", "value": "View menu"},
+  {"step": 3, "action": "type", "input": "standard_user", "element": "USERNAME_FIELD", "by": "id", "value": "com.saucelabs.mydemoapp.android:id/nameET"}
+]
+```
+
+| Language | Status |
+|---|---|
+| Java (JUnit 5 + Appium java-client) | ✅ `-appium-lang java` (default) |
+| Kotlin, Python (Appium-Python-Client + pytest), JavaScript/TypeScript (WebdriverIO) | 🔜 one emitter file each. PRs welcome |
+| Anything else | read `<name>.steps.json` directly from your own framework |
+
+To add a language: implement the `Emitter` interface in `internal/appium/<lang>.go` (`FileName` + `Render`, see `java.go`), register it in `internal/appium/emitter.go`, and add a test. The `-appium-lang` flag lists every registered language.
 
 ## Speed: caching and parallel devices
 
@@ -343,7 +409,7 @@ Most of the time goes into running journeys on the device (about 1 minute per sh
 - the Claude model;
 - the run-prompt version.
 
-On the next run, a journey with the same fingerprint is reported as `CACHED` in under a second, and its last report and locators are kept. Anything that changes re-runs automatically: editing the journey, installing a new build, using another device type, or upgrading this tool. Failures are never cached. Use `-no-cache` to re-run everything.
+On the next run, a journey with the same fingerprint is reported as `CACHED` in under a second, and its last report and Appium code are kept. Anything that changes re-runs automatically: editing the journey, installing a new build, using another device type, or upgrading this tool. Failures are never cached. Use `-no-cache` to re-run everything.
 
 Measured on an emulator: `login` took 1m15s the first time and 0.3s when cached.
 
@@ -404,6 +470,7 @@ cmd/journeys/        CLI entry point (flags, subcommands, wiring)
 internal/common/     shared kernel: proc (exec), claude (headless CLI client), adb
 internal/source/     document ingestion + source-kind registry (sources.yaml)
 internal/journey/    journey model, XML codec, heal guard
+internal/appium/     recorded steps → Appium test code (one emitter per language)
 internal/gherkin/    PRD → feature, feature → journeys (cucumber parser expands Background/Outline)
 internal/runner/     run + heal loop, parallel device lanes, result cache, report parsing, summary
 examples/            example PRDs + sample journeys
@@ -456,4 +523,4 @@ So the Go CLI holds all the logic, and `run_journeys.sh` is a thin launcher.
 ## Keywords
 
 Android UI testing · AI test automation · Android Journeys · Android CLI · Claude Code · Gherkin / BDD · PRD to test cases · exploratory testing ·
-self-healing tests · test generation from requirements · Appium locators · Notion / Confluence to tests · QA automation
+self-healing tests · test generation from requirements · Appium code generation · Appium locators · Notion / Confluence to tests · QA automation

@@ -72,6 +72,9 @@ func (a *fakeAgent) Run(_ context.Context, p claude.Prompt) (claude.Result, erro
 		if err := os.WriteFile(report, []byte(body), 0o644); err != nil {
 			a.t.Fatal(err)
 		}
+		steps := between(p.Text, "test automation. Write ", " as a JSON")
+		_ = os.WriteFile(steps, []byte(`[{"step":1,"action":"tap","element":"LOGIN_BUTTON","by":"accessibilityId","value":"Login"},`+
+			`{"step":2,"action":"verify","element":"PRODUCTS_TITLE","by":"id","value":"app:id/productTV"}]`), 0o644)
 		return claude.Result{}, nil
 	}
 	h := a.heals[0]
@@ -290,5 +293,30 @@ func TestDuplicateNamesRejected(t *testing.T) {
 	s := NewRunnerService(Deps{Lanes: []Lane{{}}, ReportDir: t.TempDir()})
 	if _, err := s.Run(context.Background(), []string{"a/x.journey.xml", "b/x.journey.xml"}); err == nil {
 		t.Fatal("want error for duplicate journey names")
+	}
+}
+
+func TestAppiumCodeGenerated(t *testing.T) {
+	a := &fakeAgent{runs: []string{passReport}}
+	s, p, _ := setup(t, a, 0)
+	res, _ := s.Run(context.Background(), []string{p})
+	r := res[0]
+	if r.Appium == "" || r.AppiumSteps != 2 || filepath.Base(r.Appium) != "CheckoutJourney.java" {
+		t.Fatalf("got %+v", r)
+	}
+	src, _ := os.ReadFile(r.Appium)
+	for _, want := range []string{
+		`public static final By LOGIN_BUTTON = AppiumBy.accessibilityId("Login");`,
+		`// 1. Tap "LOGIN"`,
+		`visible(wait, LOGIN_BUTTON).click();`,
+		`assertTrue(visible(wait, PRODUCTS_TITLE).isDisplayed(), "Verify products shown");`,
+	} {
+		if !strings.Contains(string(src), want) {
+			t.Errorf("missing %q in:\n%s", want, src)
+		}
+	}
+	// A cached run still points at the generated code.
+	if res, _ := s.Run(context.Background(), []string{p}); res[0].Status != Cached || res[0].Appium != r.Appium {
+		t.Fatalf("cached: %+v", res[0])
 	}
 }

@@ -6,18 +6,21 @@ import (
 	"strings"
 )
 
-func runPrompt(journeyPath, serial, pkg, report, locators string) string {
+func runPrompt(journeyPath, serial, pkg, report, steps string) string {
 	return fmt.Sprintf(`Run the journey in %[1]s on device %[2]s using the android-cli skill.
 The app %[3]s is already launched and in the foreground; do not reinstall, clear, or relaunch it.
 Prefer 'android layout' to locate elements; take a screenshot only for visual assertions or when the element is not in the layout.
 Match labels case-insensitively and ignore small wording differences (e.g. "LOGIN" matches a "Login" button). Judge a Verify action by its meaning: it passes when the screen shows what it describes.
 Stop at the first failed action.
 Write results to %[4]s: exactly one "### Action: <text>" header per <action> in the journey, with <text> copied verbatim from the journey (do not split, merge, or reword actions), ending in ✅ if it passed or ❌ if it failed. Actions not run get a header with no mark. Do not include HTML comments or legend lines.
-For every element you tap, type into, or verify, read its attributes from 'android layout' and record an Appium Java locator.
-Choose the strategy in this order: AppiumBy.accessibilityId (content-desc), AppiumBy.id (full resource-id), AppiumBy.androidUIAutomator, and AppiumBy.xpath only if nothing else is unique.
-Do not use dynamic text or index-based selectors unless no other option exists.
-Write the locators to %[5]s, one line per element, in exactly this form and nothing else:
-public static final By UPPER_SNAKE_NAME = AppiumBy.<strategy>("<value>");`, journeyPath, serial, pkg, report, locators)
+
+Also record what you did for Appium test automation. Write %[5]s as a JSON array with one object per interaction, in the order performed:
+{"step": <1-based index of the journey action>, "action": "tap|type|verify|scroll|swipe|back|wait|other", "input": "<text typed, only for type>", "element": "<UPPER_SNAKE_NAME>", "by": "accessibilityId|id|androidUIAutomator|xpath", "value": "<locator value>"}
+- One journey action may need several objects (e.g. tap a field, then type). For verify, record the element that proves the check.
+- Read the element's attributes from 'android layout'. Choose "by" in this order: accessibilityId (content-desc), id (full resource-id), androidUIAutomator, and xpath only if nothing else is unique. Avoid dynamic text and index-based selectors unless nothing else exists.
+- Name elements by meaning (LOGIN_BUTTON, USERNAME_FIELD), reusing the same name for the same element.
+- Omit element/by/value for actions without an element (back, wait).
+- Write only valid JSON: no comments, no code fences.`, journeyPath, serial, pkg, report, steps)
 }
 
 func healPrompt(journeyPath, serial, pkg, report, failText string, failIdx, attempt, max int) string {

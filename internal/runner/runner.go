@@ -30,14 +30,16 @@ func (s Status) Passed() bool { return s == Pass || s == Healed || s == Cached }
 
 // Result is the outcome of one journey including its heal attempts.
 type Result struct {
-	Name     string
-	Path     string
-	Serial   string
-	Status   Status
-	Heals    int
-	Elapsed  time.Duration
-	Note     string
-	Locators string
+	Name    string
+	Path    string
+	Serial  string
+	Status  Status
+	Heals   int
+	Elapsed time.Duration
+	Note    string
+	// Appium is the generated test code file, if any steps were recorded.
+	Appium      string
+	AppiumSteps int
 	// CachedAt is when the cached pass was recorded (Status == Cached).
 	CachedAt time.Time
 }

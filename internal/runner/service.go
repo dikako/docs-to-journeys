@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dikako/docs-to-journeys/internal/appium"
 	"github.com/dikako/docs-to-journeys/internal/common/claude"
 	"github.com/dikako/docs-to-journeys/internal/common/proc"
 	"github.com/dikako/docs-to-journeys/internal/journey"
@@ -49,8 +50,10 @@ type Deps struct {
 	Pkg   string
 	// Model is recorded in the cache key; a different model re-runs journeys.
 	Model string
-	// ReportDir receives <name>.md, .log, .locators.java, .png, heal files.
+	// ReportDir receives <name>.md, .log, .png, heal files, and appium/.
 	ReportDir string
+	// Appium renders the recorded steps as test code (nil: java).
+	Appium appium.Emitter
 	// MaxHeal is how many heal → re-run cycles a failing journey gets.
 	MaxHeal int
 	// NoCache re-runs journeys even when an identical pass is cached.
@@ -69,6 +72,9 @@ type RunnerService struct {
 func NewRunnerService(d Deps) *RunnerService {
 	if d.Out == nil {
 		d.Out = io.Discard
+	}
+	if d.Appium == nil {
+		d.Appium, _ = appium.Lookup("java")
 	}
 	return &RunnerService{d: d, cache: resultCache{dir: filepath.Join(d.ReportDir, ".cache")}}
 }
@@ -129,7 +135,7 @@ func (s *RunnerService) runJob(ctx context.Context, l Lane, path string) Result 
 		w = lockedWriter{mu: &s.outMu, w: s.d.Out}
 	}
 	r := s.runJourney(ctx, l, path, w)
-	s.printLocators(w, r)
+	s.printAppium(w, r)
 	suffix := ""
 	if r.Status == Cached {
 		suffix = ", passed " + r.CachedAt.Format("2006-01-02 15:04")
@@ -169,16 +175,20 @@ func uniqueNames(paths []string) error {
 
 func journeyName(path string) string { return strings.TrimSuffix(filepath.Base(path), ".journey.xml") }
 
-type files struct{ report, log, locators, png, diff string }
+type files struct{ report, log, steps, code, png, diff string }
 
 func (s *RunnerService) files(name string) files {
 	b := filepath.Join(s.d.ReportDir, name)
-	return files{report: b + ".md", log: b + ".log", locators: b + ".locators.java", png: b + ".png", diff: b + ".heal.diff"}
+	code := filepath.Join(s.d.ReportDir, "appium", s.d.Appium.FileName(appium.Script{Slug: name}))
+	return files{
+		report: b + ".md", log: b + ".log", png: b + ".png", diff: b + ".heal.diff",
+		steps: filepath.Join(s.d.ReportDir, "appium", name+".steps.json"), code: code,
+	}
 }
 
 func (s *RunnerService) clean(name string) {
 	f := s.files(name)
-	for _, p := range []string{f.report, f.log, f.locators, f.png, f.diff} {
+	for _, p := range []string{f.report, f.log, f.steps, f.code, f.png, f.diff} {
 		_ = os.Remove(p)
 	}
 	old, _ := filepath.Glob(filepath.Join(s.d.ReportDir, name+".heal.*.log"))
@@ -190,7 +200,7 @@ func (s *RunnerService) clean(name string) {
 func (s *RunnerService) runJourney(ctx context.Context, l Lane, path string, out io.Writer) Result {
 	name := journeyName(path)
 	f := s.files(name)
-	r := Result{Name: name, Path: path, Serial: l.Serial, Locators: f.locators}
+	r := Result{Name: name, Path: path, Serial: l.Serial}
 	title := name
 	if len(s.d.Lanes) > 1 {
 		title += " [" + l.Serial + "]"
@@ -211,6 +221,9 @@ func (s *RunnerService) runJourney(ctx context.Context, l Lane, path string, out
 	if !s.d.NoCache {
 		if e, ok := s.cache.lookup(name, key, f.report); ok {
 			r.Status, r.Heals, r.CachedAt = Cached, e.Heals, e.At
+			if _, err := os.Stat(f.code); err == nil {
+				r.Appium = f.code
+			}
 			return r
 		}
 	}
@@ -243,6 +256,7 @@ func (s *RunnerService) runJourney(ctx context.Context, l Lane, path string, out
 		fmt.Fprintf(out, "  note: %s\n", r.Note)
 	}
 	r.Elapsed = time.Since(start)
+	r.Appium, r.AppiumSteps = s.renderAppium(path, f)
 
 	if r.Status.Passed() {
 		// Key the final file: a healed journey is cached as healed.
@@ -258,11 +272,13 @@ func (s *RunnerService) runJourney(ctx context.Context, l Lane, path string, out
 // runOnce resets the app and runs the journey once.
 func (s *RunnerService) runOnce(ctx context.Context, l Lane, path string, f files) (Status, string) {
 	_ = os.Remove(f.report)
+	_ = os.Remove(f.steps)
+	_ = os.MkdirAll(filepath.Dir(f.steps), 0o755)
 	if err := l.Device.ClearAndLaunch(ctx, s.d.Pkg, l.Activity); err != nil {
 		return Error, err.Error()
 	}
 	res, err := s.d.Agent.Run(ctx, claude.Prompt{
-		Text:  runPrompt(path, l.Serial, s.d.Pkg, f.report, f.locators),
+		Text:  runPrompt(path, l.Serial, s.d.Pkg, f.report, f.steps),
 		Tools: runTools,
 		Log:   f.log,
 	})
@@ -361,20 +377,47 @@ func (s *RunnerService) writeDiff(ctx context.Context, original []byte, path, ou
 	_ = os.WriteFile(out, []byte(res.Stdout), 0o644)
 }
 
-func (s *RunnerService) printLocators(w io.Writer, r Result) {
-	if r.Locators == "" {
-		return
+// renderAppium turns the last run's recorded steps into test code. It returns
+// the code path and step count, or "" when nothing usable was recorded.
+func (s *RunnerService) renderAppium(path string, f files) (string, int) {
+	data, err := os.ReadFile(f.steps)
+	if err != nil {
+		return "", 0
 	}
-	fmt.Fprintf(w, "  %s Appium locators: %s %s\n", sep, r.Name, sep)
-	b, err := os.ReadFile(r.Locators)
-	if err != nil || len(bytes.TrimSpace(b)) == 0 {
-		fmt.Fprintln(w, "  (none recorded)")
-	} else {
-		for _, l := range strings.Split(strings.TrimRight(string(b), "\n"), "\n") {
-			fmt.Fprintln(w, "  "+l)
+	j, err := journey.Load(path)
+	if err != nil {
+		return "", 0
+	}
+	acts := j.Actions()
+	texts := make([]string, len(acts))
+	for i, a := range acts {
+		texts[i] = string(a)
+	}
+	failedAt := 0
+	if rep, err := parseReport(f.report); err == nil {
+		if st, ok := rep.failed(); ok {
+			failedAt = j.IndexOf(st.Text) + 1
 		}
 	}
-	fmt.Fprintf(w, "  %s\n", sep)
+	sc, err := appium.Decode(data, j.Name(), journeyName(path), texts, failedAt)
+	if err != nil || len(sc.Steps) == 0 {
+		return "", 0
+	}
+	if err := os.WriteFile(f.code, s.d.Appium.Render(sc), 0o644); err != nil {
+		return "", 0
+	}
+	return f.code, len(sc.Steps)
+}
+
+func (s *RunnerService) printAppium(w io.Writer, r Result) {
+	switch {
+	case r.Appium == "":
+		fmt.Fprintln(w, "  appium: (no steps recorded)")
+	case r.Status == Cached:
+		fmt.Fprintf(w, "  appium: %s (from cached run)\n", r.Appium)
+	default:
+		fmt.Fprintf(w, "  appium: %s (%d steps)\n", r.Appium, r.AppiumSteps)
+	}
 }
 
 func firstLine(s string) string {

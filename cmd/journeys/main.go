@@ -27,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dikako/docs-to-journeys/internal/appium"
 	"github.com/dikako/docs-to-journeys/internal/common/adb"
 	"github.com/dikako/docs-to-journeys/internal/common/claude"
 	"github.com/dikako/docs-to-journeys/internal/common/proc"
@@ -52,6 +53,7 @@ flags (env var in brackets):`
 
 type config struct {
 	pkg, model, reports, work, features, generated, sources string
+	appiumLang                                              string
 	timeout                                                 time.Duration
 	maxHeal                                                 int
 	force, noCache                                          bool
@@ -86,6 +88,7 @@ func parseFlags(name string, args []string) (config, []string) {
 	fs.StringVar(&c.features, "features", env("FEATURE_DIR", "features"), "generated .feature files [FEATURE_DIR]")
 	fs.StringVar(&c.generated, "generated", env("GENERATED_DIR", "generated"), "generated journeys [GENERATED_DIR]")
 	fs.StringVar(&c.sources, "sources", env("SOURCES_FILE", "sources.yaml"), "extra source kinds [SOURCES_FILE]")
+	fs.StringVar(&c.appiumLang, "appium-lang", env("APPIUM_LANG", "java"), "language of the generated Appium test code ("+strings.Join(appium.Languages(), ", ")+") [APPIUM_LANG]")
 	fs.IntVar(&c.maxHeal, "max-heal", envInt("MAX_HEAL", 3), "heal → re-run cycles per failing journey [MAX_HEAL]")
 	fs.BoolVar(&c.force, "force", os.Getenv("FORCE") == "1", "ignore caches and overwrite generated files [FORCE=1]")
 	fs.BoolVar(&c.noCache, "no-cache", os.Getenv("NO_CACHE") == "1", "re-run journeys even if an identical run already passed [NO_CACHE=1]")
@@ -254,6 +257,10 @@ func (c config) run(ctx context.Context, serials string, patterns []string) (int
 	if err != nil {
 		return 0, err
 	}
+	emitter, err := appium.Lookup(c.appiumLang)
+	if err != nil {
+		return 0, err
+	}
 
 	var lanes []runner.Lane
 	for _, serial := range strings.Split(serials, ",") {
@@ -275,7 +282,7 @@ func (c config) run(ctx context.Context, serials string, patterns []string) (int
 
 	svc := runner.NewRunnerService(runner.Deps{
 		Agent: c.agent(), Lanes: lanes, Pkg: c.pkg, Model: c.model,
-		ReportDir: c.reports, MaxHeal: c.maxHeal, NoCache: c.noCache, Out: os.Stdout,
+		ReportDir: c.reports, MaxHeal: c.maxHeal, NoCache: c.noCache, Appium: emitter, Out: os.Stdout,
 	})
 	start := time.Now()
 	results, err := svc.Run(ctx, paths)
