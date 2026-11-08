@@ -26,6 +26,53 @@ Each run produces:
 > [Journeys for Android Studio](https://developer.android.com/studio/gemini/journeys) ·
 > [Android CLI](https://developer.android.com/tools/agents/android-cli)
 
+## Who is this for?
+
+| You are… | Use it to… |
+|---|---|
+| **QA engineer** | turn a PRD or ticket into runnable acceptance tests in minutes, without writing code. Re-run them on every build, and get bug evidence (report + screenshot) when the app is wrong. |
+| **Android developer** | smoke-test your feature on an emulator before opening a PR; keep UI tests working after a redesign (self-healing); get ready-made Appium locators for your own test code. |
+| **QA lead / PM** | check that what was built matches the PRD: every acceptance criterion becomes a scenario with a pass/fail result. |
+
+### Good fit and not a fit
+
+| ✅ Good fit | ❌ Not a fit (use something else) |
+|---|---|
+| Acceptance tests generated from requirements | Unit tests or logic tests (use JUnit/Robolectric) |
+| Smoke and regression runs on each build | Performance, battery, or network profiling |
+| UI flows that change often (healing keeps tests current) | Pixel-perfect visual checks (use screenshot testing) |
+| Checking the app against the PRD | Multi-finger gestures, long-press, rotation (see the [Journeys limits](https://developer.android.com/studio/gemini/journeys)) |
+| Bootstrapping Appium locators | Hard, fully deterministic CI gates: an AI judges each step, so expect occasional flakiness |
+| Turning exploratory findings into regression tests ([see below](#exploratory-testing)) | iOS or web apps |
+
+A run costs agent time and tokens: about 1 minute per short journey, and several minutes when healing kicks in.
+The [cache](#speed-caching-and-parallel-devices) skips journeys that already passed, so repeat runs are cheap.
+
+### Exploratory testing?
+
+**Not by itself: docs-to-journeys does scripted testing.** Every journey follows steps derived from a document, and healing only adapts *how* a step is done, never *what* is checked. It won't wander off to look for bugs nobody described.
+
+It does three exploratory-adjacent things:
+- **Docs vs. reality:** run journeys generated from a PRD, and every `HEALED` diff shows where the real app differs from what the document says (renamed buttons, extra screens, missing fields).
+- **Flow discovery:** to heal, the agent explores the app to find the real path to the next check. The heal log (`reports/<name>.heal.<n>.log`) records what it found.
+- **Bug triage:** `APP_BUG` results flag places where the agent decided the app, not the test, is wrong.
+
+**Recommended loop for exploratory testing:** explore with Claude Code directly, then use this tool to lock in what you found.
+
+```bash
+# 1. Exploratory session: charter-based, with a time box, notes as you go
+claude "Using the android-cli skill, run a 20-minute exploratory session on com.your.app on emulator-5554.
+Charter: explore checkout with edge-case input (empty fields, very long text, emoji, back navigation mid-flow).
+Log every issue to exploratory-notes.md: title, steps to reproduce, expected vs actual, screenshot path."
+
+# 2. Turn the findings into regression tests
+./run_journeys.sh gherkin exploratory-notes.md      # each issue → a scenario (review it!)
+./run_journeys.sh convert features/exploratory-notes.feature
+./run_journeys.sh run emulator-5554 generated/exploratory-notes
+```
+
+Bugs you find by hand then become journeys that fail until each bug is fixed, and pass (or come back as `CACHED`) after.
+
 ## Requirements
 
 | Tool | Why |
@@ -66,6 +113,23 @@ git clone https://github.com/dikako/docs-to-journeys.git && cd docs-to-journeys
 ```
 
 `run_journeys.sh` builds the Go CLI into `bin/journeys`, both on first use and whenever the sources change. It then forwards all arguments. You can run it from any folder: `reports/`, `work/`, `features/` and `generated/` are created in the current directory, and those folders are git-ignored.
+
+### Testing your own app
+
+1. Install your app on the device or emulator (`adb install app-debug.apk`).
+2. Write a PRD or acceptance criteria in Markdown. Start from [`examples/checkout-prd.md`](examples/checkout-prd.md) and see [Writing a PRD that converts well](#writing-a-prd-that-converts-well).
+3. Run with your package name:
+
+```bash
+./run_journeys.sh gherkin -pkg com.your.app docs/my-feature.md            # review features/my-feature.feature
+./run_journeys.sh convert -pkg com.your.app features/my-feature.feature
+./run_journeys.sh run     -pkg com.your.app emulator-5554 generated/my-feature
+```
+
+Tips:
+- Use a **debug or test build** with test accounts, and turn off things like OTP and captcha. The agent can't read your SMS.
+- Every journey starts from a **fresh app** (`pm clear` + launch). Put login and setup steps in the PRD's preconditions, which become the Gherkin `Background`.
+- Commit `features/*.feature` and the journeys you keep. They're your test suite; `reports/` is not.
 
 ### Install with Go
 
@@ -208,6 +272,17 @@ Example from a real run: [`examples/journeys/checkout.journey.xml`](examples/jou
 
 The exit code is `0` when every journey passed or healed, `1` when any did not, and `2` on a usage or setup error.
 
+### Triage: what to do with each result
+
+| Result | QA action | Dev action |
+|---|---|---|
+| `PASS` / `CACHED` | nothing | nothing |
+| `HEALED` | review `reports/<name>.heal.diff`. If the new steps are right, commit the healed journey. If the app *should* have matched the PRD, file a bug or update the PRD | the UI changed from the spec; confirm it was intended |
+| `APP_BUG` | file a bug with `reports/<name>.md` (steps + verdict) and `reports/<name>.png` | reproduce with the steps in the report |
+| `FAIL` | read `reports/<name>.md` (which action failed and why) and the heal logs; fix the PRD/feature or the journey wording | check whether a recent change broke the flow |
+| `HEAL_REJECTED` | the healer tried to change an assertion or a passed step. Read the heal log: the assertion is probably really failing | treat like `APP_BUG` until proven otherwise |
+| `TIMEOUT` / `ERROR` | infrastructure: device offline, agent not logged in, journey too long. See `reports/<name>.log` | — |
+
 ## Outputs
 
 | Path | Content |
@@ -250,6 +325,28 @@ The other stages are cached too (`-force` resets them):
 - a feature is regenerated only when the PRD content changes;
 - existing journeys are never overwritten, so healed journeys survive regeneration.
 
+## Run in CI (sketch)
+
+The CLI exits `0` when every journey passed, so it works as a CI step. You need an emulator, the app APK, and a Claude API key (`ANTHROPIC_API_KEY` as a secret, so `claude -p` runs non-interactively).
+Here's an outline for GitHub Actions; adapt it to your pipeline:
+
+```yaml
+- uses: reactivecircus/android-emulator-runner@v2
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  with:
+    api-level: 34
+    script: |
+      adb install app/build/outputs/apk/debug/app-debug.apk
+      ./run_journeys.sh run -pkg com.your.app emulator-5554 journeys/
+- uses: actions/upload-artifact@v4
+  if: always()
+  with: { name: journey-reports, path: reports/ }
+```
+
+Install the Android CLI and Claude Code (plus the `android-cli` plugin) in an earlier step, as in [Setup](#setup).
+For pull requests, run a small smoke subset, and keep the full suite for nightly runs: it's AI-driven, so it takes minutes, not seconds.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -262,6 +359,8 @@ The other stages are cached too (`-force` resets them):
 | A journey shows `CACHED` but you want it re-run | `-no-cache`, or delete `reports/.cache/<name>.json` |
 | `journeys … would share reports/…` | two journeys have the same file name in different folders; rename one |
 | Generated journey looks wrong | edit the `.feature` file, then `convert -force` |
+| Agent gets stuck on login (OTP, captcha) | use a test build or account without them; the agent can't read SMS or solve captchas |
+| Results differ between runs (flaky) | make steps more specific, and add success criteria to each step ("…this opens the cart"); try `-model opus` for tricky screens |
 
 ## Project layout
 
@@ -321,5 +420,5 @@ So the Go CLI holds all the logic, and `run_journeys.sh` is a thin launcher.
 
 ## Keywords
 
-Android UI testing · AI test automation · Android Journeys · Android CLI · Claude Code · Gherkin / BDD · PRD to test cases ·
+Android UI testing · AI test automation · Android Journeys · Android CLI · Claude Code · Gherkin / BDD · PRD to test cases · exploratory testing ·
 self-healing tests · test generation from requirements · Appium locators · Notion / Confluence to tests · QA automation
