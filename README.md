@@ -11,15 +11,50 @@ docs-to-journeys turns a PRD or spec (Markdown, Word, PDF, Notion, Confluence, �
 runs these on a real device or emulator. When a journey's steps don't match the app's real flow, the runner **self-heals**
 the journey and runs it again. It never changes the journey's assertions.
 
-```
-PRD/doc ──ingest──▶ prd.md ──gherkin──▶ .feature ──convert──▶ *.journey.xml ──run + heal──▶ reports/
+## How it works
+
+```mermaid
+flowchart LR
+    DOC["📄 <b>Your document</b><br/>PRD · spec · ticket<br/>Markdown · Word · PDF<br/>Notion · Confluence"]
+    MD["📝 <b>prd.md</b><br/>clean text"]
+    FEAT["🥒 <b>.feature</b><br/>Gherkin scenarios<br/>👀 you review this"]
+    JRN["🧭 <b>.journey.xml</b><br/>step-by-step<br/>UI actions"]
+    RUN{"📱 <b>Run on</b><br/><b>device</b>"}
+    HEAL["🩹 <b>Self-heal</b><br/>fix the steps<br/>keep the checks"]
+    OK["✅ <b>Report</b><br/>pass/fail per step<br/>Appium locators<br/>screenshots"]
+    BUG["🐞 <b>APP_BUG</b><br/>evidence for<br/>a bug ticket"]
+
+    DOC -- "1 ingest" --> MD
+    MD -- "2 gherkin" --> FEAT
+    FEAT -- "3 convert" --> JRN
+    JRN -- "4 run" --> RUN
+    RUN -- "pass" --> OK
+    RUN -- "fail" --> HEAL
+    HEAL -- "re-run" --> RUN
+    HEAL -- "app is wrong" --> BUG
+    JRN -. "⚡ unchanged and passed before: CACHED" .-> OK
+
+    classDef doc fill:#e8f1ff,stroke:#3b82f6,color:#0b2559
+    classDef ai fill:#f3e8ff,stroke:#8b5cf6,color:#2e1065
+    classDef device fill:#fff7e6,stroke:#f59e0b,color:#4a2c00
+    classDef good fill:#e7f8ee,stroke:#22c55e,color:#0b3d20
+    classDef bad fill:#ffe9e9,stroke:#ef4444,color:#5a0b0b
+    class DOC,MD doc
+    class FEAT,JRN ai
+    class RUN,HEAL device
+    class OK good
+    class BUG bad
 ```
 
-Each run produces:
-- a pass/fail report per action;
-- an Appium Java locator for every element touched;
-- a screenshot on failure;
-- when healing happened, a diff of what changed.
+| Step | Command | What happens | What you get |
+|---|---|---|---|
+| **1. Ingest** | `ingest <doc>` | reads your doc from a file or link (Notion and Confluence through Claude's connectors) | `work/<doc>/prd.md` |
+| **2. Gherkin** | `gherkin <doc>` | AI writes one scenario per acceptance criterion. **Review and edit this file.** | `features/<doc>.feature` |
+| **3. Convert** | `convert <feature>` | each scenario becomes concrete UI steps; every `Then` becomes a `Verify` check | `generated/<doc>/*.journey.xml` |
+| **4. Run + heal** | `run <device> <journeys>` | an AI agent taps and types on the device. If the steps don't match the real app, it fixes them (never the checks) and re-runs | `reports/`: ✅ / ❌ per step, locators, screenshots, heal diffs |
+
+One command does all four: `./run_journeys.sh all <doc> <device>`.
+Each step is cached, so re-runs only redo what changed.
 
 > **What are journeys?** A journey is an XML file of plain-English steps that an AI agent performs and checks on an Android device. It's Google's format, and this project generates and runs files in it. See the official docs:
 > [Android CLI support for Journeys](https://developer.android.com/tools/agents/android-cli/journeys) ·
