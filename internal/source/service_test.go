@@ -22,21 +22,21 @@ func TestDetect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cases := map[string]string{
-		"prd.md":   "text",
-		"spec.TXT": "text",
-		"prd.docx": "rich",
-		"prd.pdf":  "pdf",
-		"https://www.notion.so/acme/Checkout-PRD-0123456789abcdef0123456789abcdef": "notion",
-		"https://acme.notion.site/Checkout-0123456789abcdef0123456789abcdef":       "notion",
-		"https://acme.atlassian.net/wiki/spaces/QA/pages/12345/Checkout+PRD":       "confluence",
-		"https://docs.google.com/document/d/abc/edit":                              "gdocs",
-		"https://example.com/prd": "web",
+	cases := []struct{ ref, want string }{
+		{"prd.md", "text"},
+		{"spec.TXT", "text"},
+		{"prd.docx", "rich"},
+		{"prd.pdf", "pdf"},
+		{"https://www.notion.so/acme/Checkout-PRD-0123456789abcdef0123456789abcdef", "notion"},
+		{"https://acme.notion.site/Checkout-0123456789abcdef0123456789abcdef", "notion"},
+		{"https://acme.atlassian.net/wiki/spaces/QA/pages/12345/Checkout+PRD", "confluence"},
+		{"https://docs.google.com/document/d/abc/edit", "gdocs"},
+		{"https://example.com/prd", "web"},
 	}
-	for ref, want := range cases {
-		got, err := s.Detect(ref)
-		if err != nil || got != want {
-			t.Errorf("%s: got %q,%v want %q", ref, got, err, want)
+	for _, c := range cases {
+		got, err := s.Detect(c.ref)
+		if err != nil || got != c.want {
+			t.Errorf("%s: got %q,%v want %q", c.ref, got, err, c.want)
 		}
 	}
 	if _, err := s.Detect("prd.xyz"); err == nil {
@@ -45,14 +45,14 @@ func TestDetect(t *testing.T) {
 }
 
 func TestSlug(t *testing.T) {
-	cases := map[string]string{
-		"docs/Checkout PRD.md": "checkout-prd",
-		"https://www.notion.so/acme/Checkout-PRD-0123456789abcdef0123456789abcdef": "checkout-prd",
-		"https://acme.atlassian.net/wiki/spaces/QA/pages/12345":                    "pages-12345",
+	cases := []struct{ ref, want string }{
+		{"docs/Checkout PRD.md", "checkout-prd"},
+		{"https://www.notion.so/acme/Checkout-PRD-0123456789abcdef0123456789abcdef", "checkout-prd"},
+		{"https://acme.atlassian.net/wiki/spaces/QA/pages/12345", "pages-12345"},
 	}
-	for ref, want := range cases {
-		if got := Slug(ref); got != want {
-			t.Errorf("%s: got %q want %q", ref, got, want)
+	for _, c := range cases {
+		if got := Slug(c.ref); got != c.want {
+			t.Errorf("%s: got %q want %q", c.ref, got, c.want)
 		}
 	}
 }

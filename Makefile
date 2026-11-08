@@ -13,7 +13,7 @@ fmt:
 	gofmt -w cmd internal
 
 check: vet test ## What CI runs
-	@test -z "$$(gofmt -l cmd internal)" || (echo "run make fmt"; gofmt -l cmd internal; exit 1)
+	@test -z "$$(gofmt -l cmd internal)" || (echo "gofmt: run 'make fmt'"; gofmt -d cmd internal; exit 1)
 
 clean:
 	rm -rf bin
